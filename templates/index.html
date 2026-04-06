@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Plinth Builder</title>
+    <link rel="stylesheet" href="/static/styles.css?v=5" />
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.176.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.176.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script defer src="/static/form.js?v=3"></script>
+    <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
+    <script type="module" src="/static/app.js?v=3"></script>
+  </head>
+  <body>
+    <header>
+      <h1>Plinth Builder</h1>
+      <p>
+        Configure a circular or rectangular display plinth, inspect the generated
+        STL, and download the file when the result looks right.
+      </p>
+    </header>
+
+    <main>
+      <aside aria-labelledby="controls-heading">
+        <h2 id="controls-heading">Configuration</h2>
+
+        <form
+          id="plinth-form"
+          data-plinth-form
+          hx-post="/preview"
+          hx-target="#preview-panel"
+          hx-swap="innerHTML"
+          hx-trigger="input changed delay:600ms, change delay:600ms, change from:input[name='plinth_type'] delay:600ms, submit"
+          hx-sync="this:replace"
+          hx-validate="true"
+          x-data='plinthForm({
+            plinthType: {{ form.plinth_type | tojson }},
+            displayUnits: {{ form.display_units | tojson }},
+            includeCenterPole: {{ form.include_center_pole | tojson }},
+            includeBottomHoles: {{ form.include_bottom_holes | tojson }},
+            includeBackdrop: {{ form.include_backdrop | tojson }},
+            lengthsMm: {
+              height: {{ form.height | tojson }},
+              depth: {{ form.depth | tojson }},
+              width: {{ form.width | tojson }},
+              circular_diameter: {{ form.circular_diameter | tojson }},
+              center_pole_height: {{ form.center_pole_height | tojson }},
+              center_pole_diameter: {{ form.center_pole_diameter | tojson }},
+              bottom_hole_depth: {{ form.bottom_hole_depth | tojson }},
+              bottom_hole_diameter: {{ form.bottom_hole_diameter | tojson }},
+              bottom_hole_inset: {{ form.bottom_hole_inset | tojson }},
+              backdrop_height: {{ form.backdrop_height | tojson }},
+              backdrop_depth: {{ form.backdrop_depth | tojson }}
+            }
+          })'
+        >
+          <fieldset>
+            <legend>Plinth type</legend>
+            <label>
+              <input
+                type="radio"
+                name="plinth_type"
+                value="rectangular"
+                x-model="plinthType"
+                {% if form.plinth_type == "rectangular" %}checked{% endif %}
+              />
+              Rectangular
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="plinth_type"
+                value="circular"
+                x-model="plinthType"
+                {% if form.plinth_type == "circular" %}checked{% endif %}
+              />
+              Circular
+            </label>
+          </fieldset>
+
+          <fieldset>
+            <legend>Measurement units</legend>
+            <label>
+              <input
+                type="radio"
+                name="display_units"
+                value="mm"
+                x-model="displayUnits"
+                @change="refreshDisplayValues()"
+                {% if form.display_units == "mm" %}checked{% endif %}
+              />
+              Millimeters
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="display_units"
+                value="in"
+                x-model="displayUnits"
+                @change="refreshDisplayValues()"
+                {% if form.display_units == "in" %}checked{% endif %}
+              />
+              Inches
+            </label>
+            <small>Displayed dimensions convert between units, but generated geometry stays in millimeters.</small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Shared dimensions</legend>
+
+            <label for="height">
+              Base height
+            </label>
+            <input
+              id="height"
+              type="number"
+              x-model="displayLengths.height"
+              @input="setLength('height', displayLengths.height)"
+              :min="displayMin(1)"
+              :step="displayStep(0.1)"
+              required
+            />
+            <input type="hidden" name="height" :value="mmValue('height')" />
+            <small>Measured upward from the bottom plane at z = 0.</small>
+
+            <label for="slope_angle">
+              Top slope angle
+            </label>
+            <input
+              id="slope_angle"
+              type="number"
+              name="slope_angle"
+              step="any"
+              value="{{ form.slope_angle }}"
+              required
+            />
+            <small>Degrees applied to the top surface.</small>
+          </fieldset>
+
+          <fieldset x-show="plinthType === 'rectangular'" :disabled="plinthType !== 'rectangular'">
+            <legend>Rectangular base</legend>
+
+            <label for="depth">
+              Depth
+            </label>
+            <input
+              id="depth"
+              type="number"
+              x-model="displayLengths.depth"
+              @input="setLength('depth', displayLengths.depth)"
+              :min="displayMin(1)"
+              :step="displayStep(0.1)"
+              required
+            />
+            <input type="hidden" name="depth" :value="mmValue('depth')" />
+            <small>World X span from the front edge to the back edge.</small>
+
+            <label for="width">
+              Width
+            </label>
+            <input
+              id="width"
+              type="number"
+              x-model="displayLengths.width"
+              @input="setLength('width', displayLengths.width)"
+              :min="displayMin(1)"
+              :step="displayStep(0.1)"
+              required
+            />
+            <input type="hidden" name="width" :value="mmValue('width')" />
+            <small>World Y span from 0 to -width.</small>
+          </fieldset>
+
+          <fieldset x-show="plinthType === 'circular'" :disabled="plinthType !== 'circular'">
+            <legend>Circular base</legend>
+
+            <label for="circular_diameter">
+              Diameter
+            </label>
+            <input
+              id="circular_diameter"
+              type="number"
+              x-model="displayLengths.circular_diameter"
+              @input="setLength('circular_diameter', displayLengths.circular_diameter)"
+              :min="displayMin(1)"
+              :step="displayStep(0.1)"
+              required
+            />
+            <input type="hidden" name="circular_diameter" :value="mmValue('circular_diameter')" />
+            <small>Measured straight across the circular footprint through its center.</small>
+          </fieldset>
+
+          <fieldset>
+            <legend>Center pole</legend>
+
+            <label>
+              <input
+                type="checkbox"
+                name="include_center_pole"
+                value="true"
+                x-model="includeCenterPole"
+                {% if form.include_center_pole %}checked{% endif %}
+              />
+              Include a centered pole
+            </label>
+
+            <section id="center-pole-fields" x-show="includeCenterPole">
+              <label for="center_pole_height">
+                Pole height above base
+              </label>
+              <input
+                id="center_pole_height"
+                type="number"
+                x-model="displayLengths.center_pole_height"
+                @input="setLength('center_pole_height', displayLengths.center_pole_height)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeCenterPole"
+                required
+              />
+              <input
+                type="hidden"
+                name="center_pole_height"
+                :value="mmValue('center_pole_height')"
+                :disabled="!includeCenterPole"
+              />
+              <small>Measured above the top surface at the centered pole location.</small>
+
+              <label for="center_pole_diameter">
+                Pole diameter
+              </label>
+              <input
+                id="center_pole_diameter"
+                type="number"
+                x-model="displayLengths.center_pole_diameter"
+                @input="setLength('center_pole_diameter', displayLengths.center_pole_diameter)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeCenterPole"
+                required
+              />
+              <input
+                type="hidden"
+                name="center_pole_diameter"
+                :value="mmValue('center_pole_diameter')"
+                :disabled="!includeCenterPole"
+              />
+            </section>
+          </fieldset>
+
+          <fieldset>
+            <legend>Bottom holes</legend>
+
+            <label>
+              <input
+                type="checkbox"
+                name="include_bottom_holes"
+                value="true"
+                x-model="includeBottomHoles"
+                {% if form.include_bottom_holes %}checked{% endif %}
+              />
+              Include bottom holes
+            </label>
+
+            <section id="bottom-hole-fields" x-show="includeBottomHoles">
+              <label for="bottom_hole_count">
+                Hole count
+              </label>
+              <input
+                id="bottom_hole_count"
+                type="number"
+                name="bottom_hole_count"
+                min="1"
+                step="1"
+                value="{{ form.bottom_hole_count }}"
+                :disabled="!includeBottomHoles"
+                required
+              />
+
+              <label for="bottom_hole_depth">
+                Hole depth
+              </label>
+              <input
+                id="bottom_hole_depth"
+                type="number"
+                x-model="displayLengths.bottom_hole_depth"
+                @input="setLength('bottom_hole_depth', displayLengths.bottom_hole_depth)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeBottomHoles"
+                required
+              />
+              <input
+                type="hidden"
+                name="bottom_hole_depth"
+                :value="mmValue('bottom_hole_depth')"
+                :disabled="!includeBottomHoles"
+              />
+
+              <label for="bottom_hole_diameter">
+                Hole diameter
+              </label>
+              <input
+                id="bottom_hole_diameter"
+                type="number"
+                x-model="displayLengths.bottom_hole_diameter"
+                @input="setLength('bottom_hole_diameter', displayLengths.bottom_hole_diameter)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeBottomHoles"
+                required
+              />
+              <input
+                type="hidden"
+                name="bottom_hole_diameter"
+                :value="mmValue('bottom_hole_diameter')"
+                :disabled="!includeBottomHoles"
+              />
+
+              <label for="bottom_hole_inset">
+                Hole inset
+              </label>
+              <input
+                id="bottom_hole_inset"
+                type="number"
+                x-model="displayLengths.bottom_hole_inset"
+                @input="setLength('bottom_hole_inset', displayLengths.bottom_hole_inset)"
+                :min="displayMin(0)"
+                :step="displayStep(0.1)"
+                :disabled="!includeBottomHoles"
+                required
+              />
+              <input
+                type="hidden"
+                name="bottom_hole_inset"
+                :value="mmValue('bottom_hole_inset')"
+                :disabled="!includeBottomHoles"
+              />
+
+              <label for="bottom_hole_start_angle">
+                Hole start angle
+              </label>
+              <input
+                id="bottom_hole_start_angle"
+                type="number"
+                name="bottom_hole_start_angle"
+                step="any"
+                value="{{ form.bottom_hole_start_angle }}"
+                :disabled="!includeBottomHoles"
+                required
+              />
+            </section>
+          </fieldset>
+
+          <fieldset x-show="plinthType === 'rectangular'" :disabled="plinthType !== 'rectangular'">
+            <legend>Backdrop</legend>
+
+            <label>
+              <input
+                type="checkbox"
+                name="include_backdrop"
+                value="true"
+                x-model="includeBackdrop"
+                {% if form.include_backdrop %}checked{% endif %}
+              />
+              Include a backdrop
+            </label>
+
+            <section id="backdrop-fields" x-show="includeBackdrop">
+              <label for="backdrop_height">
+                Backdrop height above base
+              </label>
+              <input
+                id="backdrop_height"
+                type="number"
+                x-model="displayLengths.backdrop_height"
+                @input="setLength('backdrop_height', displayLengths.backdrop_height)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeBackdrop || plinthType !== 'rectangular'"
+                required
+              />
+              <input
+                type="hidden"
+                name="backdrop_height"
+                :value="mmValue('backdrop_height')"
+                :disabled="!includeBackdrop || plinthType !== 'rectangular'"
+              />
+
+              <label for="backdrop_depth">
+                Backdrop depth
+              </label>
+              <input
+                id="backdrop_depth"
+                type="number"
+                x-model="displayLengths.backdrop_depth"
+                @input="setLength('backdrop_depth', displayLengths.backdrop_depth)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeBackdrop || plinthType !== 'rectangular'"
+                required
+              />
+              <input
+                type="hidden"
+                name="backdrop_depth"
+                :value="mmValue('backdrop_depth')"
+                :disabled="!includeBackdrop || plinthType !== 'rectangular'"
+              />
+              <small>The backdrop automatically spans the full rectangular plinth width and extends this far above the base top at the back edge.</small>
+            </section>
+          </fieldset>
+
+          <p>
+            <button type="submit">Update preview</button>
+          </p>
+        </form>
+      </aside>
+
+      <section id="preview-panel" aria-labelledby="preview-heading">
+        {% include "_preview.html" %}
+      </section>
+    </main>
+  </body>
+</html>

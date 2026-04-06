@@ -1,0 +1,33 @@
+<article>
+  <header>
+    <h2 id="preview-heading">{{ preview.title }}</h2>
+    <p>The viewer loads the same STL that the download link serves.</p>
+  </header>
+
+  <figure>
+    <div
+      id="viewer-{{ preview.id }}"
+      class="js-model-preview"
+      data-stl-url="{{ preview.stl_url }}"
+      data-viewer-width="720"
+      data-viewer-height="480"
+    >
+      <p data-viewer-status>Loading STL preview...</p>
+    </div>
+    <figcaption>Interactive STL preview.</figcaption>
+  </figure>
+
+  <p>
+    <a href="{{ preview.stl_url }}" download="{{ preview.filename }}">Download STL</a>
+  </p>
+
+  <section aria-labelledby="summary-heading">
+    <h3 id="summary-heading">Current specification</h3>
+    <dl>
+      {% for term, value in preview.summary_items %}
+        <dt>{{ term }}</dt>
+        <dd>{{ value }}</dd>
+      {% endfor %}
+    </dl>
+  </section>
+</article>

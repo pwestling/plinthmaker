@@ -1,0 +1,17 @@
+[Unit]
+Description=plinthmaker FastAPI Docker Container
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/app/plinthmaker/server
+ExecStartPre=-/usr/bin/docker stop plinthmaker-api
+ExecStartPre=-/usr/bin/docker rm plinthmaker-api
+ExecStart=/usr/bin/docker run --name plinthmaker-api --rm --publish 127.0.0.1:8000:8000 localhost/plinthmaker:latest
+ExecStop=/usr/bin/docker stop plinthmaker-api
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
