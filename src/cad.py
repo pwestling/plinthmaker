@@ -2,9 +2,10 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Literal
 
 import cadquery as cq
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 BOTTOM_HOLE_INSET = 5.0
@@ -12,6 +13,7 @@ BOTTOM_HOLE_INSET = 5.0
 
 @dataclass(frozen=True)
 class PlinthBaseFootprint:
+    profile: Literal["circle", "rectangle"]
     center_x: float
     center_y: float
     bottom_z: float
@@ -119,6 +121,86 @@ class BackdropConfig(PlinthComponentConfig):
     )
 
 
+class FooterConfig(PlinthComponentConfig):
+    """
+    Dimensions for an optional stepped footer wrapped around the plinth bottom.
+
+    The footer is modeled as two stacked outward bands that occupy only the
+    lower portion of the plinth body. The original base top stays unchanged.
+    """
+
+    height: float = Field(
+        gt=0,
+        description=(
+            "Total height of the decorative footer measured upward from the "
+            "bottom plane at z = 0."
+        ),
+    )
+    lower_outset: float = Field(
+        gt=0,
+        description=(
+            "Extra outward projection of the widest bottom band beyond the main "
+            "plinth footprint."
+        ),
+    )
+    upper_outset: float = Field(
+        ge=0,
+        description=(
+            "Extra outward projection of the narrower upper shoulder beyond the "
+            "main plinth footprint. This should usually be less than or equal to "
+            "`lower_outset`."
+        ),
+    )
+    lower_band_height: float | None = Field(
+        default=None,
+        gt=0,
+        description=(
+            "Height of the widest bottom band measured from z = 0. If omitted, "
+            "the footer uses 40% of its total height for the lower band."
+        ),
+    )
+    fillet_radius: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Optional radius used to soften the exposed horizontal step edges of "
+            "the footer. 0 leaves the stepped profile sharp."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def validate_footer_profile(self) -> "FooterConfig":
+        if self.lower_outset < self.upper_outset:
+            raise ValueError("lower_outset must be greater than or equal to upper_outset")
+
+        if self.lower_band_height is not None and self.lower_band_height >= self.height:
+            raise ValueError("lower_band_height must be less than the total footer height")
+
+        lower_band_height = self.lower_band_height
+        if lower_band_height is None:
+            lower_band_height = self.height * 0.4
+        upper_band_height = self.height - lower_band_height
+
+        max_fillet_radius = min(lower_band_height, self.lower_outset)
+        if self.lower_outset > self.upper_outset:
+            max_fillet_radius = min(
+                max_fillet_radius,
+                self.lower_outset - self.upper_outset,
+            )
+        if self.upper_outset > 0:
+            max_fillet_radius = min(
+                max_fillet_radius,
+                upper_band_height,
+                self.upper_outset,
+            )
+        if self.fillet_radius > max_fillet_radius:
+            raise ValueError(
+                f"fillet_radius must be less than or equal to {max_fillet_radius:g}"
+            )
+
+        return self
+
+
 class CircularPlinthSpec(PlinthComponentConfig):
     """
     Top-level configuration for a circular plinth centered on the world XY origin.
@@ -137,9 +219,9 @@ class CircularPlinthSpec(PlinthComponentConfig):
     height: float = Field(
         gt=0,
         description=(
-            "Height of the outer rim measured from the bottom plane at z = 0. "
-            "With a positive slope angle, the top surface sits lower at the center "
-            "than it does at the outer rim."
+            "Height of the circular top surface at the footprint center, measured "
+            "from the bottom plane at z = 0. With a positive slope angle, the "
+            "+Y side of the rim rises above this value and the -Y side falls below it."
         ),
     )
     slope_angle: float = Field(
@@ -163,6 +245,13 @@ class CircularPlinthSpec(PlinthComponentConfig):
     bottom_holes: BottomHolesConfig | None = Field(
         default=None,
         description="Optional holes cut upward from the bottom face.",
+    )
+    footer: FooterConfig | None = Field(
+        default=None,
+        description=(
+            "Optional stepped decorative footer wrapped around the circular base "
+            "near z = 0."
+        ),
     )
 
 
@@ -220,6 +309,13 @@ class RectangularPlinthSpec(PlinthComponentConfig):
         default=None,
         description="Optional holes cut upward from the bottom face.",
     )
+    footer: FooterConfig | None = Field(
+        default=None,
+        description=(
+            "Optional stepped decorative footer wrapped around the rectangular "
+            "base near z = 0."
+        ),
+    )
     backdrop: BackdropConfig | None = Field(
         default=None,
         description=(
@@ -237,6 +333,7 @@ PlinthSpec = CircularPlinthSpec | RectangularPlinthSpec
 def _set_plinth_base_footprint(
     obj: cq.Workplane,
     *,
+    profile: Literal["circle", "rectangle"],
     center_x: float,
     center_y: float,
     bottom_z: float,
@@ -244,6 +341,7 @@ def _set_plinth_base_footprint(
     semi_axis_y: float,
 ) -> cq.Workplane:
     obj._plinth_base_footprint = PlinthBaseFootprint( # type: ignore
+        profile=profile,
         center_x=center_x,
         center_y=center_y,
         bottom_z=bottom_z,
@@ -323,6 +421,60 @@ def _circular_top_z_at_center(
     return height
 
 
+def _make_footprint_solid(
+    footprint: PlinthBaseFootprint,
+    *,
+    outset: float,
+    bottom_z: float,
+    height: float,
+) -> cq.Workplane:
+    semi_axis_x = footprint.semi_axis_x + outset
+    semi_axis_y = footprint.semi_axis_y + outset
+
+    if semi_axis_x <= 0 or semi_axis_y <= 0:
+        raise ValueError("Footer geometry must leave both footprint semi-axes positive")
+
+    sketch = cq.Workplane(
+        "XY",
+        origin=(footprint.center_x, footprint.center_y, bottom_z),
+    )
+    if footprint.profile == "circle":
+        return sketch.circle(semi_axis_x).extrude(height)
+
+    return sketch.rect(semi_axis_x * 2, semi_axis_y * 2).extrude(height)
+
+
+def _fillet_edges_at_z(
+    obj: cq.Workplane,
+    *,
+    z: float,
+    radius: float,
+) -> cq.Workplane:
+    if radius <= 0:
+        return obj
+
+    bounds = obj.val().BoundingBox()
+    tolerance = 1e-6
+    selector = cq.selectors.BoxSelector(
+        (
+            bounds.xmin - 1,
+            bounds.ymin - 1,
+            z - tolerance,
+        ),
+        (
+            bounds.xmax + 1,
+            bounds.ymax + 1,
+            z + tolerance,
+        ),
+        boundingbox=True,
+    )
+    edges = obj.edges(selector)
+    if len(edges.vals()) == 0:
+        return obj
+
+    return edges.fillet(radius)
+
+
 def rectangle_plinth_base(
     obj: cq.Workplane,
     depth: float,
@@ -354,6 +506,7 @@ def rectangle_plinth_base(
     result = obj.add(side_profile)
     return _set_plinth_base_footprint(
         result,
+        profile="rectangle",
         center_x=depth / 2,
         center_y=-width / 2,
         bottom_z=0.0,
@@ -401,6 +554,7 @@ def circular_plinth_base(
 
     return _set_plinth_base_footprint(
         result,
+        profile="circle",
         center_x=0.0,
         center_y=0.0,
         bottom_z=0.0,
@@ -509,6 +663,99 @@ def add_bottom_holes(
     return _copy_plinth_base_footprint(obj, result)
 
 
+def add_decorative_footer(
+    obj: cq.Workplane,
+    *,
+    height: float,
+    lower_outset: float,
+    upper_outset: float,
+    lower_band_height: float | None = None,
+    fillet_radius: float = 0,
+) -> cq.Workplane:
+    """
+    Add a stepped decorative footer around the base of a circular or rectangular plinth.
+
+    The footer occupies only the lower portion of the plinth body. It is built as
+    a wider lower band plus a narrower upper shoulder, both centered on the
+    original base footprint. The footer does not redefine the stored "true"
+    plinth base footprint, so centered poles and bottom-hole placement continue
+    to use the main body footprint instead of the decorative overhang.
+    """
+
+    if height <= 0:
+        raise ValueError("height must be positive")
+    if lower_outset <= 0:
+        raise ValueError("lower_outset must be positive")
+    if upper_outset < 0:
+        raise ValueError("upper_outset must be non-negative")
+    if lower_outset < upper_outset:
+        raise ValueError("lower_outset must be greater than or equal to upper_outset")
+    if fillet_radius < 0:
+        raise ValueError("fillet_radius must be non-negative")
+
+    if lower_band_height is None:
+        lower_band_height = height * 0.4
+
+    if lower_band_height <= 0 or lower_band_height >= height:
+        raise ValueError("lower_band_height must be greater than 0 and less than height")
+
+    footprint = _require_plinth_base_footprint(obj)
+    bottom_z = footprint.bottom_z
+    upper_band_height = height - lower_band_height
+
+    max_fillet_radius = min(lower_band_height, lower_outset)
+    if lower_outset > upper_outset:
+        max_fillet_radius = min(
+            max_fillet_radius,
+            lower_outset - upper_outset,
+        )
+    if upper_outset > 0:
+        max_fillet_radius = min(
+            max_fillet_radius,
+            upper_band_height,
+            upper_outset,
+        )
+    if fillet_radius > max_fillet_radius:
+        raise ValueError(
+            f"fillet_radius must be less than or equal to {max_fillet_radius:g}"
+        )
+
+    lower_band = _make_footprint_solid(
+        footprint,
+        outset=lower_outset,
+        bottom_z=bottom_z,
+        height=lower_band_height,
+    )
+    upper_band = _make_footprint_solid(
+        footprint,
+        outset=upper_outset,
+        bottom_z=bottom_z + lower_band_height,
+        height=upper_band_height,
+    )
+    if fillet_radius > 0:
+        lower_band = _fillet_edges_at_z(
+            lower_band,
+            z=bottom_z,
+            radius=fillet_radius,
+        )
+        if lower_outset > upper_outset:
+            lower_band = _fillet_edges_at_z(
+                lower_band,
+                z=bottom_z + lower_band_height,
+                radius=fillet_radius,
+            )
+        if upper_outset > 0:
+            upper_band = _fillet_edges_at_z(
+                upper_band,
+                z=bottom_z + height,
+                radius=fillet_radius,
+            )
+    footer = lower_band.union(upper_band)
+    result = obj.union(footer)
+
+    return _copy_plinth_base_footprint(obj, result)
+
+
 def backdrop(
     obj: cq.Workplane,
     height: float,
@@ -554,6 +801,16 @@ def make_circular_plinth(spec: CircularPlinthSpec) -> cq.Workplane:
         slope_angle=spec.slope_angle,
     )
 
+    if spec.footer is not None:
+        obj = add_decorative_footer(
+            obj,
+            height=spec.footer.height,
+            lower_outset=spec.footer.lower_outset,
+            upper_outset=spec.footer.upper_outset,
+            lower_band_height=spec.footer.lower_band_height,
+            fillet_radius=spec.footer.fillet_radius,
+        )
+
     if spec.center_pole is not None:
         pole_total_height = _circular_top_z_at_center(
             height=spec.height,
@@ -594,6 +851,16 @@ def make_rectangular_plinth(spec: RectangularPlinthSpec) -> cq.Workplane:
         width=spec.width,
         slope_angle=spec.slope_angle,
     )
+
+    if spec.footer is not None:
+        obj = add_decorative_footer(
+            obj,
+            height=spec.footer.height,
+            lower_outset=spec.footer.lower_outset,
+            upper_outset=spec.footer.upper_outset,
+            lower_band_height=spec.footer.lower_band_height,
+            fillet_radius=spec.footer.fillet_radius,
+        )
 
     if spec.center_pole is not None:
         pole_total_height = _rectangular_top_z_at_center(

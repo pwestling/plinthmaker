@@ -21,6 +21,7 @@ window.plinthForm = function plinthForm(initialState) {
     displayUnits: initialState.displayUnits === "in" ? "in" : "mm",
     includeCenterPole: Boolean(initialState.includeCenterPole),
     includeBottomHoles: Boolean(initialState.includeBottomHoles),
+    includeFooter: Boolean(initialState.includeFooter),
     includeBackdrop: Boolean(initialState.includeBackdrop),
     lengthsMm,
     displayLengths: {},

@@ -4,6 +4,9 @@ import { STLLoader } from "three/addons/loaders/STLLoader.js";
 
 const loader = new STLLoader();
 let savedPreviewView = null;
+let savedPreviewLayoutKey = null;
+const MIN_SCENE_DIMENSION = 10;
+const SCALE_REFERENCE_GAP_RATIO = 0.15;
 
 function capturePreviewView(camera, controls) {
   return {
@@ -31,6 +34,46 @@ function viewerSize(element) {
   return { width, height };
 }
 
+async function loadStlGeometry(url) {
+  const response = await fetch(url, {
+    headers: { Accept: "model/stl" },
+  });
+  if (!response.ok) {
+    throw new Error(`Preview request failed with ${response.status}`);
+  }
+
+  return loader.parse(await response.arrayBuffer());
+}
+
+function normalizeGeometry(geometry, rotationX = -Math.PI / 2) {
+  geometry.rotateX(rotationX);
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+
+  if (geometry.boundingBox === null) {
+    throw new Error("Preview geometry has no bounds");
+  }
+
+  const originalBounds = geometry.boundingBox.clone();
+  const centeredX = (originalBounds.min.x + originalBounds.max.x) / 2;
+  const centeredZ = (originalBounds.min.z + originalBounds.max.z) / 2;
+  geometry.translate(-centeredX, -originalBounds.min.y, -centeredZ);
+  geometry.computeBoundingBox();
+
+  if (geometry.boundingBox === null) {
+    throw new Error("Preview geometry bounds could not be recomputed");
+  }
+
+  const bounds = geometry.boundingBox.clone();
+  const size = new THREE.Vector3();
+  bounds.getSize(size);
+  return { geometry, bounds, size };
+}
+
+function translatedBounds(bounds, offset) {
+  return bounds.clone().translate(offset);
+}
+
 async function renderPreview(element) {
   if (element.dataset.bound === "true") {
     return;
@@ -40,49 +83,95 @@ async function renderPreview(element) {
   const status = element.querySelector("[data-viewer-status]");
 
   try {
-    const response = await fetch(element.dataset.stlUrl, {
-      headers: { Accept: "model/stl" },
-    });
-    if (!response.ok) {
-      throw new Error(`Preview request failed with ${response.status}`);
+    const showScaleReference = element.dataset.showScaleReference === "true";
+    const layoutKey = showScaleReference ? "with-scale-reference" : "plinth-only";
+    const shouldRestoreSavedView = savedPreviewLayoutKey === layoutKey;
+    if (!shouldRestoreSavedView) {
+      savedPreviewView = null;
+      savedPreviewLayoutKey = layoutKey;
     }
-
-    const geometry = loader.parse(await response.arrayBuffer());
-    geometry.rotateX(-Math.PI / 2);
-    geometry.computeVertexNormals();
-    geometry.computeBoundingBox();
-
-    if (geometry.boundingBox === null) {
-      throw new Error("Preview geometry has no bounds");
-    }
-
-    const originalBounds = geometry.boundingBox.clone();
-    const centeredX = (originalBounds.min.x + originalBounds.max.x) / 2;
-    const centeredZ = (originalBounds.min.z + originalBounds.max.z) / 2;
-    geometry.translate(-centeredX, -originalBounds.min.y, -centeredZ);
-    geometry.computeBoundingBox();
-
-    if (geometry.boundingBox === null) {
-      throw new Error("Preview geometry bounds could not be recomputed");
-    }
-
-    const bounds = geometry.boundingBox.clone();
-    const size = new THREE.Vector3();
-    bounds.getSize(size);
-    const maxDimension = Math.max(size.x, size.y, size.z, 10);
+    const [mainGeometry, scaleGeometry] = await Promise.all([
+      loadStlGeometry(element.dataset.stlUrl),
+      showScaleReference
+        ? loadStlGeometry(element.dataset.scaleReferenceUrl)
+        : Promise.resolve(null),
+    ]);
+    const mainModel = normalizeGeometry(mainGeometry);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
     renderer.domElement.setAttribute("aria-label", "Interactive 3D STL preview");
 
     const scene = new THREE.Scene();
+    const sceneBounds = mainModel.bounds.clone();
+    const disposables = [mainModel.geometry];
+
+    const plinthMaterial = new THREE.MeshStandardMaterial({
+      color: 0xb87333,
+      roughness: 0.45,
+      metalness: 0.05,
+    });
+    disposables.push(plinthMaterial);
+    const plinthMesh = new THREE.Mesh(mainModel.geometry, plinthMaterial);
+    scene.add(plinthMesh);
+
+    if (scaleGeometry !== null) {
+      const scaleModel = normalizeGeometry(scaleGeometry, 0);
+      const gap = Math.max(
+        mainModel.size.x,
+        scaleModel.size.x,
+        MIN_SCENE_DIMENSION,
+      ) * SCALE_REFERENCE_GAP_RATIO;
+      const scaleOffset = new THREE.Vector3(
+        mainModel.bounds.max.x + gap + scaleModel.size.x / 2,
+        0,
+        0,
+      );
+      const scaleMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8c8c8c,
+        roughness: 0.6,
+        metalness: 0.05,
+        transparent: true,
+        opacity: 0.9,
+      });
+      disposables.push(scaleModel.geometry, scaleMaterial);
+      const scaleMesh = new THREE.Mesh(scaleModel.geometry, scaleMaterial);
+      scaleMesh.position.copy(scaleOffset);
+      scene.add(scaleMesh);
+
+      const scaleBounds = translatedBounds(scaleModel.bounds, scaleOffset);
+      sceneBounds.expandByPoint(scaleBounds.min);
+      sceneBounds.expandByPoint(scaleBounds.max);
+    }
+
+    const sceneSize = new THREE.Vector3();
+    sceneBounds.getSize(sceneSize);
+    const sceneCenter = new THREE.Vector3();
+    sceneBounds.getCenter(sceneCenter);
+    const maxDimension = Math.max(
+      sceneSize.x,
+      sceneSize.y,
+      sceneSize.z,
+      MIN_SCENE_DIMENSION,
+    );
+
     const camera = new THREE.PerspectiveCamera(40, 1, 0.1, maxDimension * 20);
-    camera.position.set(maxDimension * 1.4, maxDimension * 1.1, maxDimension * 1.4);
+    camera.position.copy(
+      sceneCenter.clone().add(
+        new THREE.Vector3(maxDimension * 1.4, maxDimension * 1.1, maxDimension * 1.4),
+      ),
+    );
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    if (!restorePreviewView(camera, controls)) {
-      controls.target.set(0, size.y * 0.4, 0);
+    if (shouldRestoreSavedView && restorePreviewView(camera, controls)) {
+      // Keep the existing view when the preview content changes but the scene layout does not.
+    } else {
+      controls.target.set(
+        sceneCenter.x,
+        sceneBounds.min.y + sceneSize.y * 0.35,
+        sceneCenter.z,
+      );
       controls.update();
     }
     savedPreviewView = capturePreviewView(camera, controls);
@@ -95,17 +184,11 @@ async function renderPreview(element) {
     keyLight.position.set(maxDimension, maxDimension * 2, maxDimension);
     scene.add(keyLight);
 
-    const gridSize = Math.ceil(maxDimension * 3);
+    const gridSize = Math.ceil(
+      Math.max(sceneSize.x, sceneSize.z, MIN_SCENE_DIMENSION) * 3,
+    );
     scene.add(new THREE.GridHelper(gridSize, Math.max(Math.round(gridSize / 2), 2)));
     scene.add(new THREE.AxesHelper(Math.max(maxDimension * 0.75, 10)));
-
-    const material = new THREE.MeshStandardMaterial({
-      color: 0xb87333,
-      roughness: 0.45,
-      metalness: 0.05,
-    });
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
 
     if (status) {
       status.remove();
@@ -137,8 +220,9 @@ async function renderPreview(element) {
       resizeObserver.disconnect();
       window.cancelAnimationFrame(frameHandle);
       element.getPreviewView = undefined;
-      geometry.dispose();
-      material.dispose();
+      disposables.forEach((resource) => {
+        resource.dispose();
+      });
       renderer.dispose();
     };
   } catch (error) {

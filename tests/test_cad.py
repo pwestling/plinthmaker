@@ -19,6 +19,18 @@ class CadGeometryTests(unittest.TestCase):
     def top_face_center(self, obj: cq.Workplane) -> tuple[float, float, float]:
         return obj.faces(">Z").val().Center().toTuple()
 
+    def horizontal_face_bounds_at_z(self, obj: cq.Workplane, z: float) -> cq.BoundBox:
+        for face in obj.faces("|Z").vals():
+            bounds = face.BoundingBox()
+            if math.isclose(bounds.zmin, z, abs_tol=1e-6) and math.isclose(
+                bounds.zmax,
+                z,
+                abs_tol=1e-6,
+            ):
+                return bounds
+
+        self.fail(f"Did not find a horizontal face at z={z}")
+
     def test_rectangle_plinth_base_extrudes_along_negative_y(self) -> None:
         obj = cad.rectangle_plinth_base(cq.Workplane("XZ"), 5, 7, 10, slope_angle=25)
 
@@ -128,6 +140,76 @@ class CadGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(centers[0][1], -20.0, places=6)
         self.assertAlmostEqual(centers[0][2], 0.0)
 
+    def test_add_decorative_footer_creates_expected_rectangular_steps(self) -> None:
+        obj = cad.rectangle_plinth_base(cq.Workplane("XZ"), 40, 20, 20)
+        obj = cad.add_decorative_footer(
+            obj,
+            height=8,
+            lower_outset=4,
+            upper_outset=2,
+            lower_band_height=3,
+        )
+
+        bounding_box = obj.val().BoundingBox()
+        upper_step_bounds = self.horizontal_face_bounds_at_z(obj, 8.0)
+
+        self.assertAlmostEqual(bounding_box.xmin, -4.0, places=6)
+        self.assertAlmostEqual(bounding_box.xmax, 44.0, places=6)
+        self.assertAlmostEqual(bounding_box.ymin, -24.0, places=6)
+        self.assertAlmostEqual(bounding_box.ymax, 4.0, places=6)
+        self.assertAlmostEqual(bounding_box.zmin, 0.0, places=6)
+        self.assertAlmostEqual(bounding_box.zmax, 20.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.xmin, -2.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.xmax, 42.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.ymin, -22.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.ymax, 2.0, places=6)
+
+    def test_add_decorative_footer_preserves_true_base_for_bottom_holes(self) -> None:
+        obj = cad.rectangle_plinth_base(cq.Workplane("XZ"), 40, 10, 20)
+        obj = cad.add_decorative_footer(
+            obj,
+            height=8,
+            lower_outset=4,
+            upper_outset=2,
+            lower_band_height=3,
+        )
+        obj = cad.add_bottom_holes(obj, 2, 3, 2, start_angle=90)
+
+        self.assertEqual(
+            self.rounded_xy_centers(obj),
+            [
+                (20.0, -14.0),
+                (20.0, -6.0),
+            ],
+        )
+
+    def test_add_decorative_footer_can_fillet_exposed_step_edges(self) -> None:
+        sharp = cad.add_decorative_footer(
+            cad.rectangle_plinth_base(cq.Workplane("XZ"), 40, 20, 20),
+            height=8,
+            lower_outset=4,
+            upper_outset=2,
+            lower_band_height=3,
+        )
+        rounded = cad.add_decorative_footer(
+            cad.rectangle_plinth_base(cq.Workplane("XZ"), 40, 20, 20),
+            height=8,
+            lower_outset=4,
+            upper_outset=2,
+            lower_band_height=3,
+            fillet_radius=1,
+        )
+
+        sharp_bounds = sharp.val().BoundingBox()
+        rounded_bounds = rounded.val().BoundingBox()
+
+        self.assertAlmostEqual(rounded_bounds.xmin, sharp_bounds.xmin, places=6)
+        self.assertAlmostEqual(rounded_bounds.xmax, sharp_bounds.xmax, places=6)
+        self.assertAlmostEqual(rounded_bounds.ymin, sharp_bounds.ymin, places=6)
+        self.assertAlmostEqual(rounded_bounds.ymax, sharp_bounds.ymax, places=6)
+        self.assertAlmostEqual(rounded_bounds.zmax, sharp_bounds.zmax, places=6)
+        self.assertLess(rounded.val().Volume(), sharp.val().Volume())
+
     def test_make_circular_plinth_centers_optional_pole(self) -> None:
         slope_angle = 10
         obj = cad.make_circular_plinth(
@@ -161,6 +243,35 @@ class CadGeometryTests(unittest.TestCase):
         )
 
         self.assertEqual(len(self.bottom_hole_centers(obj)), 4)
+
+    def test_make_circular_plinth_applies_optional_footer_without_changing_top_height(self) -> None:
+        obj = cad.make_circular_plinth(
+            cad.CircularPlinthSpec(
+                radius=20,
+                height=10,
+                footer=cad.FooterConfig(
+                    height=6,
+                    lower_outset=4,
+                    upper_outset=2,
+                    lower_band_height=2,
+                ),
+            )
+        )
+
+        bounding_box = obj.val().BoundingBox()
+        upper_step_bounds = self.horizontal_face_bounds_at_z(obj, 6.0)
+        top_face_center = self.top_face_center(obj)
+
+        self.assertAlmostEqual(bounding_box.xmin, -24.0, places=6)
+        self.assertAlmostEqual(bounding_box.xmax, 24.0, places=6)
+        self.assertAlmostEqual(bounding_box.ymin, -24.0, places=6)
+        self.assertAlmostEqual(bounding_box.ymax, 24.0, places=6)
+        self.assertAlmostEqual(bounding_box.zmax, 10.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.xmin, -22.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.xmax, 22.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.ymin, -22.0, places=6)
+        self.assertAlmostEqual(upper_step_bounds.ymax, 22.0, places=6)
+        self.assertAlmostEqual(top_face_center[2], 10.0, places=6)
 
     def test_make_rectangular_plinth_infers_center_pole_and_full_width_backdrop(self) -> None:
         obj = cad.make_rectangular_plinth(

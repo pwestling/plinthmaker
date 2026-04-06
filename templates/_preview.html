@@ -1,7 +1,7 @@
 <article>
   <header>
     <h2 id="preview-heading">{{ preview.title }}</h2>
-    <p>The viewer loads the same STL that the download link serves.</p>
+    <p>The viewer loads the same STL that the download link serves, with an optional scale reference overlay.</p>
   </header>
 
   <figure>
@@ -9,6 +9,8 @@
       id="viewer-{{ preview.id }}"
       class="js-model-preview"
       data-stl-url="{{ preview.stl_url }}"
+      data-show-scale-reference="{{ 'true' if preview.include_scale_reference else 'false' }}"
+      data-scale-reference-url="{{ preview.scale_reference_url }}"
       data-viewer-width="720"
       data-viewer-height="480"
     >
@@ -16,6 +18,24 @@
     </div>
     <figcaption>Interactive STL preview.</figcaption>
   </figure>
+
+  <p>
+    <label for="preview-scale-reference-toggle">
+      <input
+        id="preview-scale-reference-toggle"
+        type="checkbox"
+        data-scale-reference-toggle
+        {% if preview.include_scale_reference %}checked{% endif %}
+        hx-post="/preview"
+        hx-target="#preview-panel"
+        hx-swap="innerHTML"
+        hx-include="#plinth-form"
+        hx-sync="#plinth-form:replace"
+        hx-on::before-request="document.getElementById('include_scale_reference_hidden').value = this.checked ? 'true' : 'false'"
+      />
+      Show scale reference model in preview
+    </label>
+  </p>
 
   <p>
     <a href="{{ preview.stl_url }}" download="{{ preview.filename }}">Download STL</a>

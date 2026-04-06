@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from uuid import uuid4
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -17,6 +17,7 @@ from src.cad import (
     BottomHolesConfig,
     CenterPoleConfig,
     CircularPlinthSpec,
+    FooterConfig,
     PlinthSpec,
     RectangularPlinthSpec,
     build_plinth,
@@ -24,6 +25,7 @@ from src.cad import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+SCALE_REFERENCE_PREVIEW_PATH = BASE_DIR / "static" / "SK_M01_01_02_preview.stl"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 PlinthType = Literal["circular", "rectangular"]
 
@@ -38,6 +40,7 @@ DisplayUnit = Literal["mm", "in"]
 DEFAULT_FORM_VALUES: dict[str, object] = {
     "plinth_type": "rectangular",
     "display_units": "mm",
+    "include_scale_reference": True,
     "circular_diameter": 110.0,
     "depth": 55.0,
     "width": 55.0,
@@ -52,6 +55,12 @@ DEFAULT_FORM_VALUES: dict[str, object] = {
     "bottom_hole_diameter": 2.0,
     "bottom_hole_inset": BOTTOM_HOLE_INSET,
     "bottom_hole_start_angle": 90.0,
+    "include_footer": False,
+    "footer_height": 8.0,
+    "footer_lower_outset": 4.0,
+    "footer_upper_outset": 2.0,
+    "footer_lower_band_height": 3.0,
+    "footer_fillet_radius": 0.0,
     "include_backdrop": False,
     "backdrop_height": 12.0,
     "backdrop_depth": 3.0,
@@ -92,6 +101,7 @@ def build_spec(
     *,
     plinth_type: PlinthType,
     display_units: DisplayUnit = "mm",
+    include_scale_reference: bool = False,
     circular_diameter: float,
     depth: float,
     width: float,
@@ -106,6 +116,12 @@ def build_spec(
     bottom_hole_diameter: float,
     bottom_hole_inset: float,
     bottom_hole_start_angle: float,
+    include_footer: bool,
+    footer_height: float,
+    footer_lower_outset: float,
+    footer_upper_outset: float,
+    footer_lower_band_height: float,
+    footer_fillet_radius: float,
     include_backdrop: bool,
     backdrop_height: float,
     backdrop_depth: float,
@@ -127,6 +143,16 @@ def build_spec(
             start_angle=bottom_hole_start_angle,
         )
 
+    footer = None
+    if include_footer:
+        footer = FooterConfig(
+            height=footer_height,
+            lower_outset=footer_lower_outset,
+            upper_outset=footer_upper_outset,
+            lower_band_height=footer_lower_band_height,
+            fillet_radius=footer_fillet_radius,
+        )
+
     if plinth_type == "circular":
         return CircularPlinthSpec(
             radius=circular_diameter / 2,
@@ -134,6 +160,7 @@ def build_spec(
             slope_angle=slope_angle,
             center_pole=center_pole,
             bottom_holes=bottom_holes,
+            footer=footer,
         )
 
     backdrop = None
@@ -150,6 +177,7 @@ def build_spec(
         slope_angle=slope_angle,
         center_pole=center_pole,
         bottom_holes=bottom_holes,
+        footer=footer,
         backdrop=backdrop,
     )
 
@@ -195,6 +223,25 @@ def summary_items(spec: PlinthSpec, *, display_units: DisplayUnit) -> list[tuple
         )
 
     items.append(("Slope angle", f"{format_angle(spec.slope_angle)}°"))
+
+    if spec.footer is None:
+        items.append(("Footer", "Not included"))
+    else:
+        lower_band_height = spec.footer.lower_band_height
+        if lower_band_height is None:
+            lower_band_height = spec.footer.height * 0.4
+        items.append(
+            (
+                "Footer",
+                (
+                    f"{format_length(spec.footer.height, display_units)} {unit_label} tall, "
+                    f"{format_length(spec.footer.lower_outset, display_units)} {unit_label} lower outset, "
+                    f"{format_length(spec.footer.upper_outset, display_units)} {unit_label} upper outset, "
+                    f"{format_length(lower_band_height, display_units)} {unit_label} lower band, "
+                    f"{format_length(spec.footer.fillet_radius, display_units)} {unit_label} fillet"
+                ),
+            )
+        )
 
     if spec.center_pole is None:
         items.append(("Center pole", "Not included"))
@@ -253,8 +300,21 @@ def build_preview_context(
     display_units_value = form_values.get("display_units")
     if display_units_value == "in":
         display_units = "in"
+    include_scale_reference = bool(form_values.get("include_scale_reference"))
+    stl_query_values = {
+        key: value
+        for key, value in form_values.items()
+        if key not in {"display_units", "include_scale_reference"}
+    }
+    preview_summary_items = summary_items(spec, display_units=display_units)
+    preview_summary_items.append(
+        (
+            "Scale reference",
+            "Shown in preview only" if include_scale_reference else "Not shown",
+        )
+    )
     query_string = urlencode(
-        {key: query_value(value) for key, value in form_values.items()},
+        {key: query_value(value) for key, value in stl_query_values.items()},
     )
     stl_path = str(app.url_path_for("download_stl"))
     return {
@@ -263,8 +323,10 @@ def build_preview_context(
         if isinstance(spec, CircularPlinthSpec)
         else "Rectangular plinth preview",
         "spec": spec,
-        "summary_items": summary_items(spec, display_units=display_units),
+        "summary_items": preview_summary_items,
         "stl_url": f"{stl_path}?{query_string}",
+        "include_scale_reference": include_scale_reference,
+        "scale_reference_url": str(request.url_for("scale_reference_preview")),
         "filename": filename_for_spec(spec),
         "request": request,
     }
@@ -294,11 +356,27 @@ async def healthcheck() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get(
+    "/preview-assets/SK_M01_01_02_preview-v1.stl",
+    response_class=FileResponse,
+    name="scale_reference_preview",
+)
+async def scale_reference_preview() -> FileResponse:
+    return FileResponse(
+        SCALE_REFERENCE_PREVIEW_PATH,
+        media_type="model/stl",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+        },
+    )
+
+
 @app.post("/preview", response_class=HTMLResponse)
 async def render_preview(
     request: Request,
     plinth_type: PlinthType = Form("rectangular"),
     display_units: DisplayUnit = Form("mm"),
+    include_scale_reference: bool = Form(True),
     circular_diameter: float = Form(110.0),
     depth: float = Form(55.0),
     width: float = Form(55.0),
@@ -313,6 +391,12 @@ async def render_preview(
     bottom_hole_diameter: float = Form(2.0),
     bottom_hole_inset: float = Form(BOTTOM_HOLE_INSET),
     bottom_hole_start_angle: float = Form(0.0),
+    include_footer: bool = Form(False),
+    footer_height: float = Form(8.0),
+    footer_lower_outset: float = Form(4.0),
+    footer_upper_outset: float = Form(2.0),
+    footer_lower_band_height: float = Form(3.0),
+    footer_fillet_radius: float = Form(0.0),
     include_backdrop: bool = Form(False),
     backdrop_height: float = Form(12.0),
     backdrop_depth: float = Form(3.0),
@@ -320,6 +404,7 @@ async def render_preview(
     form_values = {
         "plinth_type": plinth_type,
         "display_units": display_units,
+        "include_scale_reference": include_scale_reference,
         "circular_diameter": circular_diameter,
         "depth": depth,
         "width": width,
@@ -334,6 +419,12 @@ async def render_preview(
         "bottom_hole_diameter": bottom_hole_diameter,
         "bottom_hole_inset": bottom_hole_inset,
         "bottom_hole_start_angle": bottom_hole_start_angle,
+        "include_footer": include_footer,
+        "footer_height": footer_height,
+        "footer_lower_outset": footer_lower_outset,
+        "footer_upper_outset": footer_upper_outset,
+        "footer_lower_band_height": footer_lower_band_height,
+        "footer_fillet_radius": footer_fillet_radius,
         "include_backdrop": include_backdrop,
         "backdrop_height": backdrop_height,
         "backdrop_depth": backdrop_depth,
@@ -382,6 +473,12 @@ async def download_stl(
     bottom_hole_diameter: float = Query(2.0),
     bottom_hole_inset: float = Query(BOTTOM_HOLE_INSET),
     bottom_hole_start_angle: float = Query(0.0),
+    include_footer: bool = Query(False),
+    footer_height: float = Query(8.0),
+    footer_lower_outset: float = Query(4.0),
+    footer_upper_outset: float = Query(2.0),
+    footer_lower_band_height: float = Query(3.0),
+    footer_fillet_radius: float = Query(0.0),
     include_backdrop: bool = Query(False),
     backdrop_height: float = Query(12.0),
     backdrop_depth: float = Query(3.0),
@@ -403,6 +500,12 @@ async def download_stl(
             bottom_hole_diameter=bottom_hole_diameter,
             bottom_hole_inset=bottom_hole_inset,
             bottom_hole_start_angle=bottom_hole_start_angle,
+            include_footer=include_footer,
+            footer_height=footer_height,
+            footer_lower_outset=footer_lower_outset,
+            footer_upper_outset=footer_upper_outset,
+            footer_lower_band_height=footer_lower_band_height,
+            footer_fillet_radius=footer_fillet_radius,
             include_backdrop=include_backdrop,
             backdrop_height=backdrop_height,
             backdrop_depth=backdrop_depth,

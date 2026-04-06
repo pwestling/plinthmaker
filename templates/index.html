@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Plinth Builder</title>
-    <link rel="stylesheet" href="/static/styles.css?v=5" />
+    <link rel="stylesheet" href="/static/styles.css?v=6" />
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script type="importmap">
       {
@@ -14,9 +14,9 @@
         }
       }
     </script>
-    <script defer src="/static/form.js?v=3"></script>
+    <script defer src="/static/form.js?v=5"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
-    <script type="module" src="/static/app.js?v=3"></script>
+    <script type="module" src="/static/app.js?v=6"></script>
   </head>
   <body>
     <header>
@@ -45,6 +45,7 @@
             displayUnits: {{ form.display_units | tojson }},
             includeCenterPole: {{ form.include_center_pole | tojson }},
             includeBottomHoles: {{ form.include_bottom_holes | tojson }},
+            includeFooter: {{ form.include_footer | tojson }},
             includeBackdrop: {{ form.include_backdrop | tojson }},
             lengthsMm: {
               height: {{ form.height | tojson }},
@@ -56,11 +57,23 @@
               bottom_hole_depth: {{ form.bottom_hole_depth | tojson }},
               bottom_hole_diameter: {{ form.bottom_hole_diameter | tojson }},
               bottom_hole_inset: {{ form.bottom_hole_inset | tojson }},
+              footer_height: {{ form.footer_height | tojson }},
+              footer_lower_outset: {{ form.footer_lower_outset | tojson }},
+              footer_upper_outset: {{ form.footer_upper_outset | tojson }},
+              footer_lower_band_height: {{ form.footer_lower_band_height | tojson }},
+              footer_fillet_radius: {{ form.footer_fillet_radius | tojson }},
               backdrop_height: {{ form.backdrop_height | tojson }},
               backdrop_depth: {{ form.backdrop_depth | tojson }}
             }
           })'
         >
+          <input
+            id="include_scale_reference_hidden"
+            type="hidden"
+            name="include_scale_reference"
+            value="{{ 'true' if form.include_scale_reference else 'false' }}"
+          />
+
           <fieldset>
             <legend>Plinth type</legend>
             <label>
@@ -356,6 +369,124 @@
                 :disabled="!includeBottomHoles"
                 required
               />
+            </section>
+          </fieldset>
+
+          <fieldset>
+            <legend>Decorative footer</legend>
+
+            <label>
+              <input
+                type="checkbox"
+                name="include_footer"
+                value="true"
+                x-model="includeFooter"
+                {% if form.include_footer %}checked{% endif %}
+              />
+              Include a stepped footer
+            </label>
+
+            <section id="footer-fields" x-show="includeFooter">
+              <label for="footer_height">
+                Footer height
+              </label>
+              <input
+                id="footer_height"
+                type="number"
+                x-model="displayLengths.footer_height"
+                @input="setLength('footer_height', displayLengths.footer_height)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeFooter"
+                required
+              />
+              <input
+                type="hidden"
+                name="footer_height"
+                :value="mmValue('footer_height')"
+                :disabled="!includeFooter"
+              />
+
+              <label for="footer_lower_outset">
+                Lower band outset
+              </label>
+              <input
+                id="footer_lower_outset"
+                type="number"
+                x-model="displayLengths.footer_lower_outset"
+                @input="setLength('footer_lower_outset', displayLengths.footer_lower_outset)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeFooter"
+                required
+              />
+              <input
+                type="hidden"
+                name="footer_lower_outset"
+                :value="mmValue('footer_lower_outset')"
+                :disabled="!includeFooter"
+              />
+
+              <label for="footer_upper_outset">
+                Upper band outset
+              </label>
+              <input
+                id="footer_upper_outset"
+                type="number"
+                x-model="displayLengths.footer_upper_outset"
+                @input="setLength('footer_upper_outset', displayLengths.footer_upper_outset)"
+                :min="displayMin(0)"
+                :step="displayStep(0.1)"
+                :disabled="!includeFooter"
+                required
+              />
+              <input
+                type="hidden"
+                name="footer_upper_outset"
+                :value="mmValue('footer_upper_outset')"
+                :disabled="!includeFooter"
+              />
+
+              <label for="footer_lower_band_height">
+                Lower band height
+              </label>
+              <input
+                id="footer_lower_band_height"
+                type="number"
+                x-model="displayLengths.footer_lower_band_height"
+                @input="setLength('footer_lower_band_height', displayLengths.footer_lower_band_height)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="!includeFooter"
+                required
+              />
+              <input
+                type="hidden"
+                name="footer_lower_band_height"
+                :value="mmValue('footer_lower_band_height')"
+                :disabled="!includeFooter"
+              />
+
+              <label for="footer_fillet_radius">
+                Footer fillet radius
+              </label>
+              <input
+                id="footer_fillet_radius"
+                type="number"
+                x-model="displayLengths.footer_fillet_radius"
+                @input="setLength('footer_fillet_radius', displayLengths.footer_fillet_radius)"
+                :min="displayMin(0)"
+                :step="displayStep(0.1)"
+                :disabled="!includeFooter"
+                required
+              />
+              <input
+                type="hidden"
+                name="footer_fillet_radius"
+                :value="mmValue('footer_fillet_radius')"
+                :disabled="!includeFooter"
+              />
+              <small>The footer adds a wider lower step and a narrower upper shoulder around the main plinth body.</small>
             </section>
           </fieldset>
 
