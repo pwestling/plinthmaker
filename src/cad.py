@@ -49,6 +49,28 @@ class CenterPoleConfig(PlinthComponentConfig):
     )
 
 
+class CenterHoleConfig(PlinthComponentConfig):
+    """
+    Dimensions for an optional vertical hole centered on a plinth footprint.
+
+    In the packaged plinth builders, the hole axis is inferred from the plinth
+    footprint center and `depth` is interpreted as how far the hole extends
+    below the local top surface at that centered location.
+    """
+
+    depth: float = Field(
+        gt=0,
+        description=(
+            "Depth of the cylindrical hole measured downward from the local top "
+            "surface at the centered hole axis."
+        ),
+    )
+    diameter: float = Field(
+        gt=0,
+        description="Diameter of the cylindrical hole.",
+    )
+
+
 class BottomHolesConfig(PlinthComponentConfig):
     """
     Dimensions for optional magnet or heat-set insert holes in the bottom face.
@@ -242,6 +264,13 @@ class CircularPlinthSpec(PlinthComponentConfig):
             "that center point."
         ),
     )
+    center_hole: CenterHoleConfig | None = Field(
+        default=None,
+        description=(
+            "Optional centered cylindrical hole cut downward from the circular top "
+            "surface at the footprint center."
+        ),
+    )
     bottom_holes: BottomHolesConfig | None = Field(
         default=None,
         description="Optional holes cut upward from the bottom face.",
@@ -253,6 +282,13 @@ class CircularPlinthSpec(PlinthComponentConfig):
             "near z = 0."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_center_feature(self) -> "CircularPlinthSpec":
+        if self.center_pole is not None and self.center_hole is not None:
+            raise ValueError("center_pole and center_hole are mutually exclusive")
+
+        return self
 
 
 class RectangularPlinthSpec(PlinthComponentConfig):
@@ -305,6 +341,13 @@ class RectangularPlinthSpec(PlinthComponentConfig):
             "that center point."
         ),
     )
+    center_hole: CenterHoleConfig | None = Field(
+        default=None,
+        description=(
+            "Optional centered cylindrical hole cut downward from the rectangular "
+            "top surface at the footprint center."
+        ),
+    )
     bottom_holes: BottomHolesConfig | None = Field(
         default=None,
         description="Optional holes cut upward from the bottom face.",
@@ -325,6 +368,13 @@ class RectangularPlinthSpec(PlinthComponentConfig):
             "the total wall height from z = 0."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_center_feature(self) -> "RectangularPlinthSpec":
+        if self.center_pole is not None and self.center_hole is not None:
+            raise ValueError("center_pole and center_hole are mutually exclusive")
+
+        return self
 
 
 PlinthSpec = CircularPlinthSpec | RectangularPlinthSpec
@@ -403,6 +453,31 @@ def _add_centered_pole(
         height=height,
         diameter=diameter,
     )
+
+
+def _cut_centered_top_hole(
+    obj: cq.Workplane,
+    *,
+    top_z: float,
+    slope_angle: float,
+    depth: float,
+    diameter: float,
+) -> cq.Workplane:
+    footprint = _require_plinth_base_footprint(obj)
+    hole_radius = diameter / 2
+    top_clearance = abs(math.tan(math.radians(slope_angle))) * hole_radius + 1.0
+    cut_bottom_z = top_z - depth
+    cutter_height = depth + top_clearance
+    hole = (
+        cq.Workplane(
+            "XY",
+            origin=(footprint.center_x, footprint.center_y, cut_bottom_z),
+        )
+        .circle(hole_radius)
+        .extrude(cutter_height)
+    )
+    result = obj.cut(hole)
+    return _copy_plinth_base_footprint(obj, result)
 
 
 def _rectangular_top_z_at_center(
@@ -821,6 +896,15 @@ def make_circular_plinth(spec: CircularPlinthSpec) -> cq.Workplane:
             diameter=spec.center_pole.diameter,
         )
 
+    if spec.center_hole is not None:
+        obj = _cut_centered_top_hole(
+            obj,
+            top_z=_circular_top_z_at_center(height=spec.height),
+            slope_angle=spec.slope_angle,
+            depth=spec.center_hole.depth,
+            diameter=spec.center_hole.diameter,
+        )
+
     if spec.bottom_holes is not None:
         obj = add_bottom_holes(
             obj,
@@ -872,6 +956,19 @@ def make_rectangular_plinth(spec: RectangularPlinthSpec) -> cq.Workplane:
             obj,
             height=pole_total_height,
             diameter=spec.center_pole.diameter,
+        )
+
+    if spec.center_hole is not None:
+        obj = _cut_centered_top_hole(
+            obj,
+            top_z=_rectangular_top_z_at_center(
+                depth=spec.depth,
+                height=spec.height,
+                slope_angle=spec.slope_angle,
+            ),
+            slope_angle=spec.slope_angle,
+            depth=spec.center_hole.depth,
+            diameter=spec.center_hole.diameter,
         )
 
     if spec.backdrop is not None:

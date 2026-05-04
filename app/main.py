@@ -15,6 +15,7 @@ from src.cad import (
     BOTTOM_HOLE_INSET,
     BackdropConfig,
     BottomHolesConfig,
+    CenterHoleConfig,
     CenterPoleConfig,
     CircularPlinthSpec,
     FooterConfig,
@@ -28,6 +29,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SCALE_REFERENCE_PREVIEW_PATH = BASE_DIR / "static" / "SK_M01_01_02_preview.stl"
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 PlinthType = Literal["circular", "rectangular"]
+CenterFeature = Literal["none", "pole", "hole"]
 
 app = FastAPI(
     title="Plinth Builder",
@@ -46,9 +48,11 @@ DEFAULT_FORM_VALUES: dict[str, object] = {
     "width": 55.0,
     "height": 60.0,
     "slope_angle": 0.0,
-    "include_center_pole": False,
+    "center_feature": "none",
     "center_pole_height": 20.0,
     "center_pole_diameter": 7.62,
+    "center_hole_depth": 20.0,
+    "center_hole_diameter": 7.62,
     "include_bottom_holes": True,
     "bottom_hole_count": 2,
     "bottom_hole_depth": 3.0,
@@ -97,6 +101,17 @@ def validation_message(error: ValidationError | ValueError) -> str:
     return str(error)
 
 
+def normalize_center_feature(
+    center_feature: CenterFeature | None,
+    include_center_pole: bool,
+) -> CenterFeature:
+    if center_feature is not None:
+        return center_feature
+    if include_center_pole:
+        return "pole"
+    return "none"
+
+
 def build_spec(
     *,
     plinth_type: PlinthType,
@@ -107,9 +122,11 @@ def build_spec(
     width: float,
     height: float,
     slope_angle: float,
-    include_center_pole: bool,
+    center_feature: CenterFeature,
     center_pole_height: float,
     center_pole_diameter: float,
+    center_hole_depth: float,
+    center_hole_diameter: float,
     include_bottom_holes: bool,
     bottom_hole_count: int,
     bottom_hole_depth: float,
@@ -127,10 +144,17 @@ def build_spec(
     backdrop_depth: float,
 ) -> PlinthSpec:
     center_pole = None
-    if include_center_pole:
+    if center_feature == "pole":
         center_pole = CenterPoleConfig(
             height=center_pole_height,
             diameter=center_pole_diameter,
+        )
+
+    center_hole = None
+    if center_feature == "hole":
+        center_hole = CenterHoleConfig(
+            depth=center_hole_depth,
+            diameter=center_hole_diameter,
         )
 
     bottom_holes = None
@@ -159,6 +183,7 @@ def build_spec(
             height=height,
             slope_angle=slope_angle,
             center_pole=center_pole,
+            center_hole=center_hole,
             bottom_holes=bottom_holes,
             footer=footer,
         )
@@ -176,6 +201,7 @@ def build_spec(
         height=height,
         slope_angle=slope_angle,
         center_pole=center_pole,
+        center_hole=center_hole,
         bottom_holes=bottom_holes,
         footer=footer,
         backdrop=backdrop,
@@ -243,9 +269,7 @@ def summary_items(spec: PlinthSpec, *, display_units: DisplayUnit) -> list[tuple
             )
         )
 
-    if spec.center_pole is None:
-        items.append(("Center pole", "Not included"))
-    else:
+    if spec.center_pole is not None:
         items.append(
             (
                 "Center pole",
@@ -255,6 +279,18 @@ def summary_items(spec: PlinthSpec, *, display_units: DisplayUnit) -> list[tuple
                 ),
             )
         )
+    elif spec.center_hole is not None:
+        items.append(
+            (
+                "Center hole",
+                (
+                    f"{format_length(spec.center_hole.depth, display_units)} {unit_label} below top center, "
+                    f"{format_length(spec.center_hole.diameter, display_units)} {unit_label} diameter"
+                ),
+            )
+        )
+    else:
+        items.append(("Center feature", "Not included"))
 
     if spec.bottom_holes is None:
         items.append(("Bottom holes", "Not included"))
@@ -382,9 +418,12 @@ async def render_preview(
     width: float = Form(55.0),
     height: float = Form(60.0),
     slope_angle: float = Form(0.0),
+    center_feature: CenterFeature | None = Form(None),
     include_center_pole: bool = Form(False),
     center_pole_height: float = Form(20.0),
     center_pole_diameter: float = Form(7.62),
+    center_hole_depth: float = Form(20.0),
+    center_hole_diameter: float = Form(7.62),
     include_bottom_holes: bool = Form(False),
     bottom_hole_count: int = Form(2),
     bottom_hole_depth: float = Form(3.0),
@@ -410,9 +449,11 @@ async def render_preview(
         "width": width,
         "height": height,
         "slope_angle": slope_angle,
-        "include_center_pole": include_center_pole,
+        "center_feature": normalize_center_feature(center_feature, include_center_pole),
         "center_pole_height": center_pole_height,
         "center_pole_diameter": center_pole_diameter,
+        "center_hole_depth": center_hole_depth,
+        "center_hole_diameter": center_hole_diameter,
         "include_bottom_holes": include_bottom_holes,
         "bottom_hole_count": bottom_hole_count,
         "bottom_hole_depth": bottom_hole_depth,
@@ -464,9 +505,12 @@ async def download_stl(
     width: float = Query(55.0),
     height: float = Query(60.0),
     slope_angle: float = Query(0.0),
+    center_feature: CenterFeature | None = Query(None),
     include_center_pole: bool = Query(False),
     center_pole_height: float = Query(20.0),
     center_pole_diameter: float = Query(7.62),
+    center_hole_depth: float = Query(20.0),
+    center_hole_diameter: float = Query(7.62),
     include_bottom_holes: bool = Query(False),
     bottom_hole_count: int = Query(2),
     bottom_hole_depth: float = Query(3.0),
@@ -491,9 +535,14 @@ async def download_stl(
             width=width,
             height=height,
             slope_angle=slope_angle,
-            include_center_pole=include_center_pole,
+            center_feature=normalize_center_feature(
+                center_feature,
+                include_center_pole,
+            ),
             center_pole_height=center_pole_height,
             center_pole_diameter=center_pole_diameter,
+            center_hole_depth=center_hole_depth,
+            center_hole_diameter=center_hole_diameter,
             include_bottom_holes=include_bottom_holes,
             bottom_hole_count=bottom_hole_count,
             bottom_hole_depth=bottom_hole_depth,

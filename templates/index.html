@@ -14,7 +14,7 @@
         }
       }
     </script>
-    <script defer src="/static/form.js?v=5"></script>
+    <script defer src="/static/form.js?v=6"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
     <script type="module" src="/static/app.js?v=6"></script>
   </head>
@@ -43,7 +43,7 @@
           x-data='plinthForm({
             plinthType: {{ form.plinth_type | tojson }},
             displayUnits: {{ form.display_units | tojson }},
-            includeCenterPole: {{ form.include_center_pole | tojson }},
+            centerFeature: {{ form.center_feature | tojson }},
             includeBottomHoles: {{ form.include_bottom_holes | tojson }},
             includeFooter: {{ form.include_footer | tojson }},
             includeBackdrop: {{ form.include_backdrop | tojson }},
@@ -54,6 +54,8 @@
               circular_diameter: {{ form.circular_diameter | tojson }},
               center_pole_height: {{ form.center_pole_height | tojson }},
               center_pole_diameter: {{ form.center_pole_diameter | tojson }},
+              center_hole_depth: {{ form.center_hole_depth | tojson }},
+              center_hole_diameter: {{ form.center_hole_diameter | tojson }},
               bottom_hole_depth: {{ form.bottom_hole_depth | tojson }},
               bottom_hole_diameter: {{ form.bottom_hole_diameter | tojson }},
               bottom_hole_inset: {{ form.bottom_hole_inset | tojson }},
@@ -211,20 +213,40 @@
           </fieldset>
 
           <fieldset>
-            <legend>Center pole</legend>
+            <legend>Center feature</legend>
 
             <label>
               <input
-                type="checkbox"
-                name="include_center_pole"
-                value="true"
-                x-model="includeCenterPole"
-                {% if form.include_center_pole %}checked{% endif %}
+                type="radio"
+                name="center_feature"
+                value="none"
+                x-model="centerFeature"
+                {% if form.center_feature == "none" %}checked{% endif %}
               />
-              Include a centered pole
+              No pole or hole
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="center_feature"
+                value="pole"
+                x-model="centerFeature"
+                {% if form.center_feature == "pole" %}checked{% endif %}
+              />
+              Center pole
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="center_feature"
+                value="hole"
+                x-model="centerFeature"
+                {% if form.center_feature == "hole" %}checked{% endif %}
+              />
+              Center hole
             </label>
 
-            <section id="center-pole-fields" x-show="includeCenterPole">
+            <section id="center-pole-fields" x-show="centerFeature === 'pole'">
               <label for="center_pole_height">
                 Pole height above base
               </label>
@@ -235,14 +257,14 @@
                 @input="setLength('center_pole_height', displayLengths.center_pole_height)"
                 :min="displayMin(0.1)"
                 :step="displayStep(0.1)"
-                :disabled="!includeCenterPole"
+                :disabled="centerFeature !== 'pole'"
                 required
               />
               <input
                 type="hidden"
                 name="center_pole_height"
                 :value="mmValue('center_pole_height')"
-                :disabled="!includeCenterPole"
+                :disabled="centerFeature !== 'pole'"
               />
               <small>Measured above the top surface at the centered pole location.</small>
 
@@ -256,14 +278,57 @@
                 @input="setLength('center_pole_diameter', displayLengths.center_pole_diameter)"
                 :min="displayMin(0.1)"
                 :step="displayStep(0.1)"
-                :disabled="!includeCenterPole"
+                :disabled="centerFeature !== 'pole'"
                 required
               />
               <input
                 type="hidden"
                 name="center_pole_diameter"
                 :value="mmValue('center_pole_diameter')"
-                :disabled="!includeCenterPole"
+                :disabled="centerFeature !== 'pole'"
+              />
+            </section>
+
+            <section id="center-hole-fields" x-show="centerFeature === 'hole'">
+              <label for="center_hole_depth">
+                Hole depth below top
+              </label>
+              <input
+                id="center_hole_depth"
+                type="number"
+                x-model="displayLengths.center_hole_depth"
+                @input="setLength('center_hole_depth', displayLengths.center_hole_depth)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="centerFeature !== 'hole'"
+                required
+              />
+              <input
+                type="hidden"
+                name="center_hole_depth"
+                :value="mmValue('center_hole_depth')"
+                :disabled="centerFeature !== 'hole'"
+              />
+              <small>Measured below the top surface at the centered hole location.</small>
+
+              <label for="center_hole_diameter">
+                Hole diameter
+              </label>
+              <input
+                id="center_hole_diameter"
+                type="number"
+                x-model="displayLengths.center_hole_diameter"
+                @input="setLength('center_hole_diameter', displayLengths.center_hole_diameter)"
+                :min="displayMin(0.1)"
+                :step="displayStep(0.1)"
+                :disabled="centerFeature !== 'hole'"
+                required
+              />
+              <input
+                type="hidden"
+                name="center_hole_diameter"
+                :value="mmValue('center_hole_diameter')"
+                :disabled="centerFeature !== 'hole'"
               />
             </section>
           </fieldset>

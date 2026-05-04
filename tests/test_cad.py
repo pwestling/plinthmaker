@@ -19,6 +19,10 @@ class CadGeometryTests(unittest.TestCase):
     def top_face_center(self, obj: cq.Workplane) -> tuple[float, float, float]:
         return obj.faces(">Z").val().Center().toTuple()
 
+    def top_inner_wire_centers(self, obj: cq.Workplane) -> list[tuple[float, float, float]]:
+        top_face = obj.faces(">Z").val()
+        return [wire.Center().toTuple() for wire in top_face.innerWires()]
+
     def horizontal_face_bounds_at_z(self, obj: cq.Workplane, z: float) -> cq.BoundBox:
         for face in obj.faces("|Z").vals():
             bounds = face.BoundingBox()
@@ -227,6 +231,48 @@ class CadGeometryTests(unittest.TestCase):
         self.assertAlmostEqual(top_face_center[0], 0.0, places=6)
         self.assertAlmostEqual(top_face_center[1], 0.0, places=6)
         self.assertAlmostEqual(top_face_center[2], expected_top_z, places=6)
+
+    def test_make_circular_plinth_applies_optional_center_hole(self) -> None:
+        obj = cad.make_circular_plinth(
+            cad.CircularPlinthSpec(
+                radius=20,
+                height=10,
+                center_hole=cad.CenterHoleConfig(depth=4, diameter=6),
+            )
+        )
+
+        centers = self.top_inner_wire_centers(obj)
+
+        self.assertEqual(len(centers), 1)
+        self.assertAlmostEqual(centers[0][0], 0.0, places=6)
+        self.assertAlmostEqual(centers[0][1], 0.0, places=6)
+        self.assertAlmostEqual(centers[0][2], 10.0, places=6)
+
+    def test_make_rectangular_plinth_applies_optional_center_hole(self) -> None:
+        obj = cad.make_rectangular_plinth(
+            cad.RectangularPlinthSpec(
+                depth=40,
+                width=20,
+                height=10,
+                center_hole=cad.CenterHoleConfig(depth=4, diameter=6),
+            )
+        )
+
+        centers = self.top_inner_wire_centers(obj)
+
+        self.assertEqual(len(centers), 1)
+        self.assertAlmostEqual(centers[0][0], 20.0, places=6)
+        self.assertAlmostEqual(centers[0][1], -10.0, places=6)
+        self.assertAlmostEqual(centers[0][2], 10.0, places=6)
+
+    def test_center_pole_and_center_hole_are_mutually_exclusive(self) -> None:
+        with self.assertRaises(ValueError):
+            cad.CircularPlinthSpec(
+                radius=20,
+                height=10,
+                center_pole=cad.CenterPoleConfig(height=12, diameter=4),
+                center_hole=cad.CenterHoleConfig(depth=4, diameter=6),
+            )
 
     def test_make_circular_plinth_applies_optional_bottom_holes(self) -> None:
         obj = cad.make_circular_plinth(

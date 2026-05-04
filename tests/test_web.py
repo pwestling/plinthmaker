@@ -21,6 +21,9 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('/static/styles.css', response.text)
         self.assertIn('id="include_scale_reference_hidden"', response.text)
         self.assertIn('id="preview-scale-reference-toggle"', response.text)
+        self.assertIn('name="center_feature"', response.text)
+        self.assertIn('value="hole"', response.text)
+        self.assertIn('id="center-hole-fields"', response.text)
         self.assertIn('value="true"', response.text)
 
     def test_preview_renders_circular_partial_with_download_link(self) -> None:
@@ -34,9 +37,9 @@ class WebAppTests(unittest.TestCase):
                 "width": "20",
                 "height": "14",
                 "slope_angle": "8",
-                "include_center_pole": "true",
-                "center_pole_height": "18",
-                "center_pole_diameter": "4",
+                "center_feature": "hole",
+                "center_hole_depth": "18",
+                "center_hole_diameter": "4",
                 "include_bottom_holes": "true",
                 "bottom_hole_count": "3",
                 "bottom_hole_depth": "3",
@@ -57,6 +60,8 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("Circular plinth preview", response.text)
         self.assertIn("Download STL", response.text)
         self.assertIn("plinth_type=circular", response.text)
+        self.assertIn("center_feature=hole", response.text)
+        self.assertIn("Center hole", response.text)
         self.assertIn("circular_diameter=44", response.text)
         self.assertIn("start angle", response.text)
         self.assertIn("Footer", response.text)
@@ -105,7 +110,7 @@ class WebAppTests(unittest.TestCase):
                 "width": "20",
                 "height": "10",
                 "slope_angle": "10",
-                "include_center_pole": "true",
+                "center_feature": "pole",
                 "center_pole_height": "15",
                 "center_pole_diameter": "4",
                 "include_bottom_holes": "true",

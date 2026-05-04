@@ -19,7 +19,9 @@ window.plinthForm = function plinthForm(initialState) {
   return {
     plinthType: initialState.plinthType === "circular" ? "circular" : "rectangular",
     displayUnits: initialState.displayUnits === "in" ? "in" : "mm",
-    includeCenterPole: Boolean(initialState.includeCenterPole),
+    centerFeature: ["none", "pole", "hole"].includes(initialState.centerFeature)
+      ? initialState.centerFeature
+      : "none",
     includeBottomHoles: Boolean(initialState.includeBottomHoles),
     includeFooter: Boolean(initialState.includeFooter),
     includeBackdrop: Boolean(initialState.includeBackdrop),
