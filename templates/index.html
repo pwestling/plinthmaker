@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Plinth Builder</title>
-    <link rel="stylesheet" href="/static/styles.css?v=6" />
+    <link rel="stylesheet" href="/static/styles.css?v=9" />
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script type="importmap">
       {
@@ -14,7 +14,7 @@
         }
       }
     </script>
-    <script defer src="/static/form.js?v=6"></script>
+    <script defer src="/static/form.js?v=10"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
     <script type="module" src="/static/app.js?v=6"></script>
   </head>
@@ -43,6 +43,7 @@
           x-data='plinthForm({
             plinthType: {{ form.plinth_type | tojson }},
             displayUnits: {{ form.display_units | tojson }},
+            configurationName: "",
             centerFeature: {{ form.center_feature | tojson }},
             includeBottomHoles: {{ form.include_bottom_holes | tojson }},
             includeFooter: {{ form.include_footer | tojson }},
@@ -76,7 +77,97 @@
             value="{{ 'true' if form.include_scale_reference else 'false' }}"
           />
 
-          <fieldset>
+          <nav class="form-tabs" aria-label="Configuration views">
+            <button
+              type="button"
+              :aria-pressed="activePanel === 'configuration'"
+              :class="{ active: activePanel === 'configuration' }"
+              @click="activePanel = 'configuration'"
+            >
+              Configure
+            </button>
+            <button
+              type="button"
+              :aria-pressed="activePanel === 'history'"
+              :class="{ active: activePanel === 'history' }"
+              @click="activePanel = 'history'"
+            >
+              History
+            </button>
+          </nav>
+
+          <section
+            data-history-panel
+            data-form-panel
+            x-show="activePanel === 'history'"
+            x-cloak
+          >
+            <fieldset>
+              <legend>Current draft</legend>
+              <p data-draft-status x-text="draftStatusText()">No draft saved yet</p>
+              <small x-show="storageNotice !== ''" x-text="storageNotice"></small>
+            </fieldset>
+
+            <fieldset>
+              <legend>Recent downloads</legend>
+              <p x-show="historyEntries.length === 0">No downloaded plinths yet.</p>
+              <ol class="history-list" x-show="historyEntries.length > 0">
+                <template x-for="entry in historyEntries" :key="entry.id">
+                  <li class="history-entry">
+                    <div class="history-entry-main">
+                      <strong x-text="entry.label"></strong>
+                      <small x-text="entry.name === '' ? `Last used ${formattedEntryTime(entry)}` : `${entry.dimensionLabel} - Last used ${formattedEntryTime(entry)}`"></small>
+                      <label class="history-name-field">
+                        <span>Name</span>
+                        <input
+                          type="text"
+                          maxlength="120"
+                          :value="entry.name"
+                          placeholder="Name this configuration"
+                          @input.stop.debounce.300ms="renameHistoryEntry(entry.id, $event.target.value)"
+                        />
+                      </label>
+                      <div class="history-badges" x-show="entry.badges.length > 0">
+                        <template x-for="badge in entry.badges" :key="badge">
+                          <span x-text="badge"></span>
+                        </template>
+                      </div>
+                    </div>
+                    <p class="history-actions">
+                      <button type="button" @click="loadHistoryEntry(entry.id)">Load</button>
+                      <a :href="entry.href" :download="entry.filename" @click="touchHistoryEntry(entry.id)">Download</a>
+                      <button type="button" @click="deleteHistoryEntry(entry.id)">Delete</button>
+                    </p>
+                  </li>
+                </template>
+              </ol>
+              <p class="history-clear" x-show="historyEntries.length > 0" x-cloak>
+                <button type="button" @click="clearHistory()">Clear history</button>
+              </p>
+            </fieldset>
+          </section>
+
+          <section
+            data-configuration-panel
+            data-form-panel
+            x-show="activePanel === 'configuration'"
+          >
+            <fieldset>
+              <legend>Configuration name</legend>
+              <label for="configuration_name">
+                Name
+              </label>
+              <input
+                id="configuration_name"
+                type="text"
+                maxlength="120"
+                :value="configurationName"
+                placeholder="Optional"
+                @input.stop="setConfigurationName($event.target.value)"
+              />
+            </fieldset>
+
+            <fieldset>
             <legend>Plinth type</legend>
             <label>
               <input
@@ -616,6 +707,7 @@
           <p>
             <button type="submit">Update preview</button>
           </p>
+          </section>
         </form>
       </aside>
 

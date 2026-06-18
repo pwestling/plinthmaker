@@ -31,14 +31,13 @@
         hx-swap="innerHTML"
         hx-include="#plinth-form"
         hx-sync="#plinth-form:replace"
-        hx-on::before-request="document.getElementById('include_scale_reference_hidden').value = this.checked ? 'true' : 'false'"
       />
       Show scale reference model in preview
     </label>
   </p>
 
   <p>
-    <a href="{{ preview.stl_url }}" download="{{ preview.filename }}">Download STL</a>
+    <a href="{{ preview.stl_url }}" download="{{ preview.filename }}" data-history-download>Download STL</a>
   </p>
 
   <section aria-labelledby="summary-heading">
