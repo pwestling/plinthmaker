@@ -79,7 +79,9 @@ const DEFAULT_FORM_VALUES = {
   configuration_name: "",
   plinth_type: "rectangular",
   display_units: "mm",
-  include_scale_reference: true,
+  include_scale_reference: false,
+  scale_reference_mini_id: "",
+  scale_reference_mini_name: "",
   slope_angle: 0,
   center_feature: "none",
   include_bottom_holes: true,
@@ -156,6 +158,23 @@ function normalizeConfigurationName(value) {
   }
 
   return value.trim().slice(0, 120);
+}
+
+function normalizeMiniId(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  const normalized = value.trim();
+  return /^[A-Za-z0-9][A-Za-z0-9 _+'-]{0,159}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeMiniName(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+
+  return value.trim().replace(/\s+/g, " ").slice(0, 180);
 }
 
 function storageId() {
@@ -278,6 +297,14 @@ window.plinthForm = function plinthForm(initialState) {
     formElement: null,
     activePanel: "configuration",
     configurationName: normalizeConfigurationName(initialState.configurationName),
+    selectedMiniId: normalizeMiniId(initialState.selectedMiniId),
+    selectedMiniName: normalizeMiniName(initialState.selectedMiniName),
+    miniSearchQuery: "",
+    miniSearchResults: [],
+    miniSearchState: "idle",
+    miniSearchMessage: "",
+    miniSearchTimer: 0,
+    miniSearchAbortController: null,
 
     init() {
       this.formElement = this.$el;
@@ -286,6 +313,116 @@ window.plinthForm = function plinthForm(initialState) {
       this.loadHistory();
       this.restoreCurrentDraft();
       this.bindDraftAutosave();
+    },
+
+    queueMiniSearch() {
+      window.clearTimeout(this.miniSearchTimer);
+      const query = this.miniSearchQuery.trim();
+      if (query.length < 2) {
+        if (this.miniSearchAbortController !== null) {
+          this.miniSearchAbortController.abort();
+        }
+        this.miniSearchResults = [];
+        this.miniSearchState = "idle";
+        this.miniSearchMessage = query.length === 1 ? "Type one more character." : "";
+        return;
+      }
+
+      this.miniSearchState = "waiting";
+      this.miniSearchMessage = "Searching MiniCompare…";
+      this.miniSearchTimer = window.setTimeout(() => {
+        this.performMiniSearch(query);
+      }, 250);
+    },
+
+    async performMiniSearch(query) {
+      if (this.miniSearchAbortController !== null) {
+        this.miniSearchAbortController.abort();
+      }
+
+      const controller = new AbortController();
+      this.miniSearchAbortController = controller;
+      this.miniSearchState = "loading";
+
+      try {
+        const response = await fetch(
+          `/api/minicompare/search?q=${encodeURIComponent(query)}&limit=16`,
+          {
+            headers: { Accept: "application/json" },
+            signal: controller.signal,
+          },
+        );
+        if (!response.ok) {
+          throw new Error(`MiniCompare search failed with ${response.status}`);
+        }
+
+        const payload = await response.json();
+        if (controller.signal.aborted || this.miniSearchQuery.trim() !== query) {
+          return;
+        }
+
+        this.miniSearchResults = Array.isArray(payload.items) ? payload.items : [];
+        this.miniSearchState = "ready";
+        this.miniSearchMessage = this.miniSearchResults.length === 0
+          ? "No matching minis found."
+          : `${this.miniSearchResults.length} matches`;
+      } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+          return;
+        }
+
+        this.miniSearchResults = [];
+        this.miniSearchState = "error";
+        this.miniSearchMessage = "MiniCompare is temporarily unavailable. Try again.";
+      }
+    },
+
+    selectMini(mini) {
+      const miniId = normalizeMiniId(mini.id);
+      const miniName = normalizeMiniName(mini.name);
+      if (miniId === "" || miniName === "") {
+        return;
+      }
+
+      this.selectedMiniId = miniId;
+      this.selectedMiniName = miniName;
+      this.miniSearchQuery = "";
+      this.miniSearchResults = [];
+      this.miniSearchState = "idle";
+      this.miniSearchMessage = "";
+      this.setFieldValue("scale_reference_mini_id", miniId);
+      this.setFieldValue("scale_reference_mini_name", miniName);
+      this.setFieldValue("include_scale_reference", "true");
+      this.$nextTick(() => {
+        this.saveCurrentDraft();
+        this.requestPreview();
+      });
+    },
+
+    clearSelectedMini() {
+      this.selectedMiniId = "";
+      this.selectedMiniName = "";
+      this.setFieldValue("scale_reference_mini_id", "");
+      this.setFieldValue("scale_reference_mini_name", "");
+      this.setFieldValue("include_scale_reference", "false");
+      this.$nextTick(() => {
+        this.saveCurrentDraft();
+        this.requestPreview();
+      });
+    },
+
+    miniImageUrl(miniId) {
+      const normalized = normalizeMiniId(miniId);
+      return normalized === ""
+        ? ""
+        : `/api/minicompare/image/${encodeURIComponent(normalized)}`;
+    },
+
+    miniSourceUrl(miniId) {
+      const normalized = normalizeMiniId(miniId);
+      return normalized === ""
+        ? "https://minicompare.info/"
+        : `https://minicompare.info/?${encodeURIComponent(normalized)}=`;
     },
 
     toMillimeters(value) {
@@ -377,6 +514,8 @@ window.plinthForm = function plinthForm(initialState) {
         plinth_type: this.plinthType,
         display_units: this.displayUnits,
         include_scale_reference: this.readScaleReferenceValue(),
+        scale_reference_mini_id: normalizeMiniId(this.selectedMiniId),
+        scale_reference_mini_name: normalizeMiniName(this.selectedMiniName),
         slope_angle: parseNumber(
           this.fieldValue("slope_angle", DEFAULT_FORM_VALUES.slope_angle),
           DEFAULT_FORM_VALUES.slope_angle,
@@ -419,6 +558,7 @@ window.plinthForm = function plinthForm(initialState) {
       }
 
       const fallback = this.snapshotFormPayload();
+      const scaleReferenceMiniId = normalizeMiniId(rawPayload.scale_reference_mini_id);
       const payload = {
         ...fallback,
         configuration_name: normalizeConfigurationName(rawPayload.configuration_name),
@@ -435,6 +575,10 @@ window.plinthForm = function plinthForm(initialState) {
         include_scale_reference: parseBoolean(
           rawPayload.include_scale_reference,
           fallback.include_scale_reference,
+        ) && scaleReferenceMiniId !== "",
+        scale_reference_mini_id: scaleReferenceMiniId,
+        scale_reference_mini_name: normalizeMiniName(
+          rawPayload.scale_reference_mini_name,
         ),
         slope_angle: parseNumber(rawPayload.slope_angle, fallback.slope_angle),
         center_feature: normalizeChoice(
@@ -484,6 +628,8 @@ window.plinthForm = function plinthForm(initialState) {
       this.includeFooter = payload.include_footer;
       this.includeBackdrop = payload.include_backdrop;
       this.configurationName = payload.configuration_name;
+      this.selectedMiniId = payload.scale_reference_mini_id;
+      this.selectedMiniName = payload.scale_reference_mini_name;
 
       LENGTH_FIELD_NAMES.forEach((name) => {
         this.lengthsMm[name] = payload[name];
@@ -491,6 +637,8 @@ window.plinthForm = function plinthForm(initialState) {
       this.refreshDisplayValues();
 
       this.setFieldValue("include_scale_reference", payload.include_scale_reference);
+      this.setFieldValue("scale_reference_mini_id", payload.scale_reference_mini_id);
+      this.setFieldValue("scale_reference_mini_name", payload.scale_reference_mini_name);
       this.setFieldValue("slope_angle", payload.slope_angle);
       this.setFieldValue("bottom_hole_count", payload.bottom_hole_count);
       this.setFieldValue("bottom_hole_start_angle", payload.bottom_hole_start_angle);
@@ -515,13 +663,13 @@ window.plinthForm = function plinthForm(initialState) {
         return;
       }
 
-      if (typeof this.formElement.requestSubmit === "function") {
-        this.formElement.requestSubmit();
+      if (window.htmx) {
+        window.htmx.trigger(this.formElement, "submit");
         return;
       }
 
-      if (window.htmx) {
-        window.htmx.trigger(this.formElement, "submit");
+      if (typeof this.formElement.requestSubmit === "function") {
+        this.formElement.requestSubmit();
       }
     },
 

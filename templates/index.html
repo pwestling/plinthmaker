@@ -4,7 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Plinth Builder</title>
-    <link rel="stylesheet" href="/static/styles.css?v=9" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/static/styles.css?v=10" />
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <script type="importmap">
       {
@@ -14,9 +15,9 @@
         }
       }
     </script>
-    <script defer src="/static/form.js?v=10"></script>
+    <script defer src="/static/form.js?v=11"></script>
     <script defer src="https://unpkg.com/alpinejs@3.14.9/dist/cdn.min.js"></script>
-    <script type="module" src="/static/app.js?v=6"></script>
+    <script type="module" src="/static/app.js?v=7"></script>
   </head>
   <body>
     <header>
@@ -48,6 +49,8 @@
             includeBottomHoles: {{ form.include_bottom_holes | tojson }},
             includeFooter: {{ form.include_footer | tojson }},
             includeBackdrop: {{ form.include_backdrop | tojson }},
+            selectedMiniId: {{ form.scale_reference_mini_id | tojson }},
+            selectedMiniName: {{ form.scale_reference_mini_name | tojson }},
             lengthsMm: {
               height: {{ form.height | tojson }},
               depth: {{ form.depth | tojson }},
@@ -75,6 +78,18 @@
             type="hidden"
             name="include_scale_reference"
             value="{{ 'true' if form.include_scale_reference else 'false' }}"
+          />
+          <input
+            id="scale_reference_mini_id_hidden"
+            type="hidden"
+            name="scale_reference_mini_id"
+            :value="selectedMiniId"
+          />
+          <input
+            id="scale_reference_mini_name_hidden"
+            type="hidden"
+            name="scale_reference_mini_name"
+            :value="selectedMiniName"
           />
 
           <nav class="form-tabs" aria-label="Configuration views">
@@ -165,6 +180,85 @@
                 placeholder="Optional"
                 @input.stop="setConfigurationName($event.target.value)"
               />
+            </fieldset>
+
+            <fieldset class="mini-picker">
+              <legend>Miniature scale reference</legend>
+
+              <div class="selected-mini" x-show="selectedMiniId !== ''" x-cloak>
+                <img
+                  :src="miniImageUrl(selectedMiniId)"
+                  :alt="selectedMiniName"
+                  loading="lazy"
+                />
+                <div>
+                  <strong x-text="selectedMiniName"></strong>
+                  <small>Imported at MiniCompare's 10 pixels = 1 mm scale.</small>
+                  <p class="selected-mini-actions">
+                    <a
+                      :href="miniSourceUrl(selectedMiniId)"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >View on MiniCompare</a>
+                    <button type="button" @click="clearSelectedMini()">Remove</button>
+                  </p>
+                </div>
+              </div>
+
+              <label for="mini-search">Find a mini on MiniCompare</label>
+              <input
+                id="mini-search"
+                type="search"
+                x-model="miniSearchQuery"
+                placeholder="e.g. intercessor or belakor"
+                autocomplete="off"
+                aria-controls="mini-search-results"
+                :aria-expanded="miniSearchResults.length > 0"
+                :aria-busy="miniSearchState === 'waiting' || miniSearchState === 'loading'"
+                @input.stop="queueMiniSearch()"
+                @change.stop
+                @keydown.escape="miniSearchQuery = ''; queueMiniSearch()"
+              />
+              <small>
+                Search MiniCompare's public catalog, then choose the exact pose or view.
+              </small>
+              <p
+                class="mini-search-status"
+                role="status"
+                aria-live="polite"
+                x-show="miniSearchMessage !== ''"
+                x-text="miniSearchMessage"
+                x-cloak
+              ></p>
+              <ul
+                id="mini-search-results"
+                class="mini-search-results"
+                role="list"
+                aria-label="MiniCompare search results"
+                x-show="miniSearchResults.length > 0"
+                x-cloak
+              >
+                <template x-for="mini in miniSearchResults" :key="mini.id">
+                  <li>
+                    <button
+                      type="button"
+                      :aria-pressed="mini.id === selectedMiniId"
+                      @click="selectMini(mini)"
+                    >
+                      <strong x-text="mini.name"></strong>
+                      <small x-text="mini.collection"></small>
+                    </button>
+                  </li>
+                </template>
+              </ul>
+              <small class="mini-attribution">
+                Images and scale data are provided by
+                <a
+                  href="https://minicompare.info/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >MiniCompare</a> and may contain source-photo variation.
+              </small>
             </fieldset>
 
             <fieldset>

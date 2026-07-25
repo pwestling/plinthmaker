@@ -1,7 +1,7 @@
 <article>
   <header>
     <h2 id="preview-heading">{{ preview.title }}</h2>
-    <p>The viewer loads the same STL that the download link serves, with an optional scale reference overlay.</p>
+    <p>The viewer loads the same STL that the download link serves, with an optional correctly-scaled MiniCompare cutout.</p>
   </header>
 
   <figure>
@@ -9,32 +9,48 @@
       id="viewer-{{ preview.id }}"
       class="js-model-preview"
       data-stl-url="{{ preview.stl_url }}"
-      data-show-scale-reference="{{ 'true' if preview.include_scale_reference else 'false' }}"
-      data-scale-reference-url="{{ preview.scale_reference_url }}"
+      data-show-mini-reference="{{ 'true' if preview.include_scale_reference else 'false' }}"
+      data-mount-height="{{ preview.mount_height }}"
+      {% if preview.mini_reference %}
+        data-mini-id="{{ preview.mini_reference.id }}"
+        data-mini-name="{{ preview.mini_reference.name }}"
+        data-mini-image-url="{{ preview.mini_reference.image_url }}"
+      {% endif %}
       data-viewer-width="720"
       data-viewer-height="480"
     >
-      <p data-viewer-status>Loading STL preview...</p>
+      <p data-viewer-status>Loading 3D preview...</p>
     </div>
-    <figcaption>Interactive STL preview.</figcaption>
+    <figcaption>Interactive STL preview; the cutout is centered on the mounting point at MiniCompare's 10 pixels per millimeter.</figcaption>
   </figure>
 
-  <p>
-    <label for="preview-scale-reference-toggle">
-      <input
-        id="preview-scale-reference-toggle"
-        type="checkbox"
-        data-scale-reference-toggle
-        {% if preview.include_scale_reference %}checked{% endif %}
-        hx-post="/preview"
-        hx-target="#preview-panel"
-        hx-swap="innerHTML"
-        hx-include="#plinth-form"
-        hx-sync="#plinth-form:replace"
-      />
-      Show scale reference model in preview
-    </label>
-  </p>
+  {% if preview.mini_reference %}
+    <p class="preview-reference-controls">
+      <label for="preview-scale-reference-toggle">
+        <input
+          id="preview-scale-reference-toggle"
+          type="checkbox"
+          data-scale-reference-toggle
+          {% if preview.include_scale_reference %}checked{% endif %}
+          hx-post="/preview"
+          hx-target="#preview-panel"
+          hx-swap="innerHTML"
+          hx-include="#plinth-form"
+          hx-sync="#plinth-form:replace"
+        />
+        Show <strong>{{ preview.mini_reference.name }}</strong> mounted on the plinth
+      </label>
+      <a
+        href="{{ preview.mini_reference.source_url }}"
+        target="_blank"
+        rel="noopener noreferrer"
+      >Open source on MiniCompare</a>
+    </p>
+  {% else %}
+    <p class="preview-reference-controls">
+      Search for a MiniCompare miniature in the configuration panel to add a scale reference.
+    </p>
+  {% endif %}
 
   <p>
     <a href="{{ preview.stl_url }}" download="{{ preview.filename }}" data-history-download>Download STL</a>

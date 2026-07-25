@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlencode
@@ -11,6 +12,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
+from app.minicompare import (
+    MINICOMPARE_SOURCE_URL,
+    MiniCompareCatalog,
+    MiniCompareMiniNotFoundError,
+    MiniCompareUnavailableError,
+    humanize_slug,
+)
 from src.cad import (
     BOTTOM_HOLE_INSET,
     BackdropConfig,
@@ -38,11 +46,15 @@ app = FastAPI(
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 DisplayUnit = Literal["mm", "in"]
+MINICOMPARE_MINI_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _+'-]{0,159}$")
+minicompare_catalog = MiniCompareCatalog()
 
 DEFAULT_FORM_VALUES: dict[str, object] = {
     "plinth_type": "rectangular",
     "display_units": "mm",
-    "include_scale_reference": True,
+    "include_scale_reference": False,
+    "scale_reference_mini_id": "",
+    "scale_reference_mini_name": "",
     "circular_diameter": 110.0,
     "depth": 55.0,
     "width": 55.0,
@@ -101,6 +113,24 @@ def validation_message(error: ValidationError | ValueError) -> str:
     return str(error)
 
 
+def normalize_scale_reference_mini_id(value: str) -> str:
+    normalized = value.strip()
+    if normalized == "":
+        return ""
+    if MINICOMPARE_MINI_ID_PATTERN.fullmatch(normalized) is None:
+        raise ValueError("The selected MiniCompare miniature is invalid")
+    return normalized
+
+
+def normalize_scale_reference_mini_name(value: str, mini_id: str) -> str:
+    normalized = " ".join(value.split())[:180]
+    if normalized:
+        return normalized
+    if mini_id:
+        return humanize_slug(mini_id)
+    return ""
+
+
 def normalize_center_feature(
     center_feature: CenterFeature | None,
     include_center_pole: bool,
@@ -117,6 +147,8 @@ def build_spec(
     plinth_type: PlinthType,
     display_units: DisplayUnit = "mm",
     include_scale_reference: bool = False,
+    scale_reference_mini_id: str = "",
+    scale_reference_mini_name: str = "",
     circular_diameter: float,
     depth: float,
     width: float,
@@ -336,23 +368,56 @@ def build_preview_context(
     display_units_value = form_values.get("display_units")
     if display_units_value == "in":
         display_units = "in"
-    include_scale_reference = bool(form_values.get("include_scale_reference"))
+    mini_id = normalize_scale_reference_mini_id(
+        str(form_values.get("scale_reference_mini_id", ""))
+    )
+    mini_name = normalize_scale_reference_mini_name(
+        str(form_values.get("scale_reference_mini_name", "")),
+        mini_id,
+    )
+    include_scale_reference = bool(form_values.get("include_scale_reference")) and bool(
+        mini_id
+    )
     stl_query_values = {
         key: value
         for key, value in form_values.items()
-        if key not in {"display_units", "include_scale_reference"}
+        if key
+        not in {
+            "display_units",
+            "include_scale_reference",
+            "scale_reference_mini_id",
+            "scale_reference_mini_name",
+        }
     }
     preview_summary_items = summary_items(spec, display_units=display_units)
-    preview_summary_items.append(
-        (
-            "Scale reference",
-            "Shown in preview only" if include_scale_reference else "Not shown",
+    if mini_id:
+        reference_status = (
+            "shown in preview only" if include_scale_reference else "selected, hidden"
         )
-    )
+        preview_summary_items.append(
+            ("MiniCompare reference", f"{mini_name} — {reference_status}")
+        )
+    else:
+        preview_summary_items.append(("MiniCompare reference", "No mini selected"))
     query_string = urlencode(
         {key: query_value(value) for key, value in stl_query_values.items()},
     )
     stl_path = str(app.url_path_for("download_stl"))
+    mini_reference = None
+    if mini_id:
+        mini_reference = {
+            "id": mini_id,
+            "name": mini_name,
+            "image_url": str(
+                request.url_for("minicompare_image", mini_id=mini_id)
+            ),
+            "source_url": f"{MINICOMPARE_SOURCE_URL}?{urlencode({mini_id: ''})}",
+        }
+
+    mount_height = spec.height
+    if spec.center_pole is not None:
+        mount_height += spec.center_pole.height
+
     return {
         "id": uuid4().hex,
         "title": "Circular plinth preview"
@@ -362,7 +427,8 @@ def build_preview_context(
         "summary_items": preview_summary_items,
         "stl_url": f"{stl_path}?{query_string}",
         "include_scale_reference": include_scale_reference,
-        "scale_reference_url": str(request.url_for("scale_reference_preview")),
+        "mini_reference": mini_reference,
+        "mount_height": mount_height,
         "filename": filename_for_spec(spec),
         "request": request,
     }
@@ -392,6 +458,68 @@ async def healthcheck() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/api/minicompare/search", response_class=JSONResponse)
+async def search_minicompare(
+    request: Request,
+    q: str = Query(min_length=2, max_length=100),
+    limit: int = Query(16, ge=1, le=30),
+) -> JSONResponse:
+    try:
+        minis = await minicompare_catalog.search(q, limit=limit)
+    except MiniCompareUnavailableError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    return JSONResponse(
+        {
+            "items": [
+                {
+                    "id": mini.id,
+                    "name": mini.name,
+                    "collection": mini.collection,
+                    "image_url": str(
+                        request.url_for("minicompare_image", mini_id=mini.id)
+                    ),
+                    "source_url": (
+                        f"{MINICOMPARE_SOURCE_URL}?{urlencode({mini.id: ''})}"
+                    ),
+                }
+                for mini in minis
+            ]
+        },
+        headers={"Cache-Control": "public, max-age=300"},
+    )
+
+
+@app.get(
+    "/api/minicompare/image/{mini_id}",
+    response_class=Response,
+    name="minicompare_image",
+)
+async def minicompare_image(mini_id: str) -> Response:
+    try:
+        normalized_mini_id = normalize_scale_reference_mini_id(mini_id)
+    except ValueError as error:
+        raise HTTPException(
+            status_code=404,
+            detail="MiniCompare miniature not found",
+        ) from error
+    try:
+        image = await minicompare_catalog.get_image(normalized_mini_id)
+    except MiniCompareMiniNotFoundError as error:
+        raise HTTPException(status_code=404, detail="MiniCompare miniature not found") from error
+    except MiniCompareUnavailableError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+    return Response(
+        content=image.content,
+        media_type=image.media_type,
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
 @app.get(
     "/preview-assets/SK_M01_01_02_preview-v1.stl",
     response_class=FileResponse,
@@ -412,7 +540,9 @@ async def render_preview(
     request: Request,
     plinth_type: PlinthType = Form("rectangular"),
     display_units: DisplayUnit = Form("mm"),
-    include_scale_reference: bool = Form(True),
+    include_scale_reference: bool = Form(False),
+    scale_reference_mini_id: str = Form("", max_length=160),
+    scale_reference_mini_name: str = Form("", max_length=180),
     circular_diameter: float = Form(110.0),
     depth: float = Form(55.0),
     width: float = Form(55.0),
@@ -444,6 +574,8 @@ async def render_preview(
         "plinth_type": plinth_type,
         "display_units": display_units,
         "include_scale_reference": include_scale_reference,
+        "scale_reference_mini_id": scale_reference_mini_id,
+        "scale_reference_mini_name": scale_reference_mini_name,
         "circular_diameter": circular_diameter,
         "depth": depth,
         "width": width,
@@ -471,6 +603,16 @@ async def render_preview(
         "backdrop_depth": backdrop_depth,
     }
     try:
+        normalized_mini_id = normalize_scale_reference_mini_id(
+            str(form_values["scale_reference_mini_id"])
+        )
+        form_values["scale_reference_mini_id"] = normalized_mini_id
+        form_values["scale_reference_mini_name"] = normalize_scale_reference_mini_name(
+            str(form_values["scale_reference_mini_name"]),
+            normalized_mini_id,
+        )
+        if normalized_mini_id == "":
+            form_values["include_scale_reference"] = False
         spec = build_spec(**form_values)
     except (ValidationError, ValueError) as error:
         return templates.TemplateResponse(

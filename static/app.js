@@ -3,10 +3,12 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { STLLoader } from "three/addons/loaders/STLLoader.js";
 
 const loader = new STLLoader();
+const textureLoader = new THREE.TextureLoader();
 let savedPreviewView = null;
 let savedPreviewLayoutKey = null;
 const MIN_SCENE_DIMENSION = 10;
-const SCALE_REFERENCE_GAP_RATIO = 0.15;
+// MiniCompare renders catalog images at their natural size against a 10 px/mm ruler.
+const MINICOMPARE_PIXELS_PER_MILLIMETER = 10;
 
 function capturePreviewView(camera, controls) {
   return {
@@ -45,6 +47,25 @@ async function loadStlGeometry(url) {
   return loader.parse(await response.arrayBuffer());
 }
 
+async function loadMiniTexture(url) {
+  const texture = await textureLoader.loadAsync(url);
+  const image = texture.image;
+  const widthPixels = Number(image.naturalWidth || image.width);
+  const heightPixels = Number(image.naturalHeight || image.height);
+  if (!(widthPixels > 0) || !(heightPixels > 0)) {
+    texture.dispose();
+    throw new Error("The MiniCompare cutout has invalid dimensions");
+  }
+
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.needsUpdate = true;
+  return {
+    texture,
+    width: widthPixels / MINICOMPARE_PIXELS_PER_MILLIMETER,
+    height: heightPixels / MINICOMPARE_PIXELS_PER_MILLIMETER,
+  };
+}
+
 function normalizeGeometry(geometry, rotationX = -Math.PI / 2) {
   geometry.rotateX(rotationX);
   geometry.computeVertexNormals();
@@ -65,13 +86,7 @@ function normalizeGeometry(geometry, rotationX = -Math.PI / 2) {
   }
 
   const bounds = geometry.boundingBox.clone();
-  const size = new THREE.Vector3();
-  bounds.getSize(size);
-  return { geometry, bounds, size };
-}
-
-function translatedBounds(bounds, offset) {
-  return bounds.clone().translate(offset);
+  return { geometry, bounds };
 }
 
 async function renderPreview(element) {
@@ -83,24 +98,31 @@ async function renderPreview(element) {
   const status = element.querySelector("[data-viewer-status]");
 
   try {
-    const showScaleReference = element.dataset.showScaleReference === "true";
-    const layoutKey = showScaleReference ? "with-scale-reference" : "plinth-only";
+    const showMiniReference =
+      element.dataset.showMiniReference === "true" &&
+      Boolean(element.dataset.miniImageUrl);
+    const layoutKey = showMiniReference
+      ? `mini-${element.dataset.miniId || "selected"}`
+      : "plinth-only";
     const shouldRestoreSavedView = savedPreviewLayoutKey === layoutKey;
     if (!shouldRestoreSavedView) {
       savedPreviewView = null;
       savedPreviewLayoutKey = layoutKey;
     }
-    const [mainGeometry, scaleGeometry] = await Promise.all([
+    const [mainGeometry, miniCutout] = await Promise.all([
       loadStlGeometry(element.dataset.stlUrl),
-      showScaleReference
-        ? loadStlGeometry(element.dataset.scaleReferenceUrl)
+      showMiniReference
+        ? loadMiniTexture(element.dataset.miniImageUrl)
         : Promise.resolve(null),
     ]);
     const mainModel = normalizeGeometry(mainGeometry);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio || 1);
-    renderer.domElement.setAttribute("aria-label", "Interactive 3D STL preview");
+    const ariaLabel = showMiniReference
+      ? `Interactive 3D plinth preview with a scaled ${element.dataset.miniName} cutout`
+      : "Interactive 3D plinth preview";
+    renderer.domElement.setAttribute("aria-label", ariaLabel);
 
     const scene = new THREE.Scene();
     const sceneBounds = mainModel.bounds.clone();
@@ -115,33 +137,26 @@ async function renderPreview(element) {
     const plinthMesh = new THREE.Mesh(mainModel.geometry, plinthMaterial);
     scene.add(plinthMesh);
 
-    if (scaleGeometry !== null) {
-      const scaleModel = normalizeGeometry(scaleGeometry, 0);
-      const gap = Math.max(
-        mainModel.size.x,
-        scaleModel.size.x,
-        MIN_SCENE_DIMENSION,
-      ) * SCALE_REFERENCE_GAP_RATIO;
-      const scaleOffset = new THREE.Vector3(
-        mainModel.bounds.max.x + gap + scaleModel.size.x / 2,
-        0,
-        0,
+    if (miniCutout !== null) {
+      const cutoutGeometry = new THREE.PlaneGeometry(
+        miniCutout.width,
+        miniCutout.height,
       );
-      const scaleMaterial = new THREE.MeshStandardMaterial({
-        color: 0x8c8c8c,
-        roughness: 0.6,
-        metalness: 0.05,
+      const cutoutMaterial = new THREE.MeshBasicMaterial({
+        map: miniCutout.texture,
         transparent: true,
-        opacity: 0.9,
+        alphaTest: 0.02,
+        side: THREE.DoubleSide,
       });
-      disposables.push(scaleModel.geometry, scaleMaterial);
-      const scaleMesh = new THREE.Mesh(scaleModel.geometry, scaleMaterial);
-      scaleMesh.position.copy(scaleOffset);
-      scene.add(scaleMesh);
+      disposables.push(cutoutGeometry, cutoutMaterial, miniCutout.texture);
+      const cutoutMesh = new THREE.Mesh(cutoutGeometry, cutoutMaterial);
+      const mountHeight = Number(element.dataset.mountHeight) || mainModel.bounds.max.y;
+      cutoutMesh.position.set(0, mountHeight + miniCutout.height / 2, 0);
+      scene.add(cutoutMesh);
 
-      const scaleBounds = translatedBounds(scaleModel.bounds, scaleOffset);
-      sceneBounds.expandByPoint(scaleBounds.min);
-      sceneBounds.expandByPoint(scaleBounds.max);
+      const cutoutBounds = new THREE.Box3().setFromObject(cutoutMesh);
+      sceneBounds.expandByPoint(cutoutBounds.min);
+      sceneBounds.expandByPoint(cutoutBounds.max);
     }
 
     const sceneSize = new THREE.Vector3();
