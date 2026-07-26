@@ -346,7 +346,7 @@ window.plinthForm = function plinthForm(initialState) {
 
       try {
         const response = await fetch(
-          `/api/minicompare/search?q=${encodeURIComponent(query)}&limit=16`,
+          `/api/minicompare/search?q=${encodeURIComponent(query)}&limit=100`,
           {
             headers: { Accept: "application/json" },
             signal: controller.signal,

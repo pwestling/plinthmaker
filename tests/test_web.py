@@ -11,7 +11,7 @@ client = TestClient(app)
 
 
 class FakeMiniCompareCatalog:
-    async def search(self, query: str, *, limit: int = 16) -> list[MiniCompareMini]:
+    async def search(self, query: str, *, limit: int = 100) -> list[MiniCompareMini]:
         return [
             MiniCompareMini(
                 id="primaris-intercessor-a",

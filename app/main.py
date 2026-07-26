@@ -462,7 +462,7 @@ async def healthcheck() -> JSONResponse:
 async def search_minicompare(
     request: Request,
     q: str = Query(min_length=2, max_length=100),
-    limit: int = Query(16, ge=1, le=30),
+    limit: int = Query(100, ge=1, le=100),
 ) -> JSONResponse:
     try:
         minis = await minicompare_catalog.search(q, limit=limit)

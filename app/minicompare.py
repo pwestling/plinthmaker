@@ -156,7 +156,7 @@ class MiniCompareCatalog:
             self._loaded_at = monotonic()
             return self._items
 
-    async def search(self, query: str, *, limit: int = 16) -> list[MiniCompareMini]:
+    async def search(self, query: str, *, limit: int = 100) -> list[MiniCompareMini]:
         items = await self._load_items()
         normalized_query = " ".join(query.casefold().split())
         tokens = normalized_query.split()
